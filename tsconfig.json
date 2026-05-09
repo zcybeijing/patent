@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2018",
+    "lib": ["ES2018", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": false,
+    "sourceMap": true,
+    "outDir": "./build"
+  },
+  "include": ["src", "typings"],
+  "exclude": ["build", "addon", "node_modules"]
+}

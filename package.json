@@ -1,0 +1,40 @@
+{
+  "name": "zotero-patent",
+  "version": "1.0.0",
+  "description": "Zotero 插件：从中国专利网抓取专利元数据并下载 PDF，更新条目",
+  "type": "module",
+  "config": {
+    "addonName": "Zotero Patent Helper",
+    "addonID": "zotero-patent@local",
+    "addonRef": "zoteroPatent",
+    "addonInstance": "ZoteroPatent",
+    "prefsPrefix": "extensions.zotero.zoteroPatent"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/placeholder/placeholder.git"
+  },
+  "scripts": {
+    "postinstall": "patch-package",
+    "start": "zotero-plugin serve",
+    "build": "zotero-plugin build",
+    "lint:check": "prettier --check . && eslint .",
+    "lint:fix": "prettier --write . && eslint . --fix"
+  },
+  "dependencies": {
+    "pdf-parse": "^2.4.5",
+    "pdfjs-dist": "^5.6.205",
+    "zotero-plugin-toolkit": "^5.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "eslint": "^8.0.0",
+    "patch-package": "^8.0.1",
+    "prettier": "^3.0.0",
+    "typescript": "^5.0.0",
+    "zotero-plugin-scaffold": "^0.8.5"
+  },
+  "resolutions": {
+    "zotero-plugin-scaffold": "^0.8.0"
+  }
+}

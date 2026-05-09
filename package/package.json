@@ -1,0 +1,113 @@
+{
+  "name": "zotero-plugin-scaffold",
+  "type": "module",
+  "version": "0.8.5",
+  "description": "A scaffold for Zotero plugin development.",
+  "author": "northword",
+  "license": "AGPL-3.0-or-later",
+  "homepage": "https://zotero-plugin-dev.github.io/zotero-plugin-scaffold",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zotero-plugin-dev/zotero-plugin-scaffold.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zotero-plugin-dev/zotero-plugin-scaffold/issues"
+  },
+  "keywords": [
+    "zotero",
+    "plugin",
+    "developer",
+    "scaffold",
+    "web-ext"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./cli": {
+      "import": "./dist/cli.js"
+    },
+    "./vendor": {
+      "types": "./dist/vendor.d.ts",
+      "import": "./dist/vendor.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "zotero-plugin": "./bin/zotero-plugin.mjs"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.8.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "directories": {
+    "lib": "dist"
+  },
+  "dependencies": {
+    "@fluent/syntax": "^0.19.0",
+    "@swc/core": "^1.15.18",
+    "adm-zip": "^0.5.16",
+    "bumpp": "^10.4.1",
+    "c12": "4.0.0-beta.3",
+    "chokidar": "^5.0.0",
+    "commander": "^14.0.3",
+    "es-toolkit": "^1.45.1",
+    "esbuild": "^0.27.4",
+    "fs-extra": "^11.3.4",
+    "hookable": "^6.0.1",
+    "octokit": "^5.0.5",
+    "std-env": "^4.0.0",
+    "tiny-update-notifier": "^2.0.2",
+    "tinyglobby": "^0.2.15",
+    "xvfb-ts": "^1.1.1"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "^7.7.2",
+    "@commander-js/extra-typings": "^14.0.0",
+    "@types/adm-zip": "^0.5.7",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^25.5.0",
+    "bumpp": "^10.4.1",
+    "changelogen": "^0.6.2",
+    "eslint": "^10.0.3",
+    "eslint-plugin-format": "^2.0.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "tsdown": "^0.21.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "unbuild": "^3.6.1",
+    "unplugin-raw": "^0.6.4",
+    "vitest": "^4.1.0"
+  },
+  "workspaces": [
+    "src",
+    "docs"
+  ],
+  "lint-staged": {
+    "*": "eslint --fix"
+  },
+  "scripts": {
+    "dev": "tsdown --watch",
+    "build": "pnpm build:tsdown && pnpm build:tsc",
+    "build:tsdown": "tsdown",
+    "build:tsc": "tsc --noEmit",
+    "lint:check": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "docs:dev": "pnpm -C docs run dev",
+    "docs:build": "pnpm -C docs run build",
+    "release": "bumpp -r --commit \"chore(release): publish v%s\"",
+    "update:deps": "pnpx taze minor -w -f -l -r",
+    "test": "vitest"
+  }
+}
