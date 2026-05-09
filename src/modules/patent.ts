@@ -79,6 +79,21 @@ export function registerMenu() {
     popup.appendChild(browserItem);
     menuElements.push(browserItem);
 
+    // Batch metadata menu item
+    const batchMetadataItem = doc.createXULElement('menuitem');
+    batchMetadataItem.id = config.addonRef + '-batch-metadata';
+    batchMetadataItem.setAttribute('label', '批量获取专利元数据');
+    batchMetadataItem.setAttribute('image', 'chrome://zoteroPatent/content/icons/favicon.png');
+    batchMetadataItem.addEventListener('command', async () => {
+        Zotero.debug('[Patent] batch metadata menu clicked');
+        const items = Zotero.getActiveZoteroPane().getSelectedItems();
+        if (items.length > 0) {
+            await handleBatchMetadata(items);
+        }
+    });
+    popup.appendChild(batchMetadataItem);
+    menuElements.push(batchMetadataItem);
+
     // Show/hide menus based on selection
     popup.addEventListener('popupshowing', () => {
         const items = Zotero.getActiveZoteroPane().getSelectedItems();
@@ -86,8 +101,9 @@ export function registerMenu() {
         separator.hidden = !hasPatent;
         metadataItem.hidden = !hasPatent;
         fileItem.hidden = !hasPatent;
+        batchMetadataItem.hidden = !hasPatent || items.length < 2;
         browserItem.hidden = false; // Browser is always available
-        Zotero.debug('[Patent] popupshowing: hasPatent=' + hasPatent);
+        Zotero.debug('[Patent] popupshowing: hasPatent=' + hasPatent + ', count=' + items.length);
     });
 
     Zotero.debug('[Patent] menus registered successfully');
@@ -253,6 +269,101 @@ async function handleGetFile(item: any) {
     }
 }
 
+async function handleBatchMetadata(items: any[]) {
+    Zotero.debug('[Patent] handleBatchMetadata called, count: ' + items.length);
+
+    const patentTypeID = Zotero.ItemTypes.getID('patent');
+    const patentItems = items.filter((item: any) => {
+        const itemTypeID = item.itemTypeID;
+        const itemTypeName = item.itemType;
+        return itemTypeID === patentTypeID || itemTypeName?.toLowerCase() === 'patent';
+    });
+
+    if (patentItems.length === 0) {
+        showNotification('请选中专利类型的条目');
+        return;
+    }
+
+    showNotification('正在批量提取 ' + patentItems.length + ' 个条目的PDF元数据...');
+
+    let successCount = 0;
+    let failCount = 0;
+    const skippedItems: string[] = [];
+
+    for (let i = 0; i < patentItems.length; i++) {
+        const item = patentItems[i];
+        const title = item.getField ? item.getField('title') : item.title;
+        Zotero.debug('[Patent] Processing ' + (i + 1) + '/' + patentItems.length + ': ' + title);
+
+        try {
+            const attachments = await getAttachments(item);
+
+            let pdfAttachment = null;
+            for (const att of attachments) {
+                try {
+                    let filename = '';
+                    let contentType = '';
+
+                    if (typeof att.getFilename === 'function') {
+                        filename = await att.getFilename();
+                    } else if (typeof att.getField === 'function') {
+                        try {
+                            filename = att.getField('filename') || '';
+                        } catch {}
+                    }
+                    if (!filename && att.attachmentFilename) {
+                        filename = att.attachmentFilename;
+                    }
+
+                    if (att.attachmentContentType) {
+                        contentType = att.attachmentContentType;
+                    } else if (typeof att.getField === 'function') {
+                        try {
+                            contentType = att.getField('contentType') || '';
+                        } catch {}
+                    }
+
+                    if (contentType === 'application/pdf' || filename?.toLowerCase().endsWith('.pdf')) {
+                        pdfAttachment = att;
+                        break;
+                    }
+                } catch (e) {
+                    Zotero.debug('[Patent] Error checking attachment: ' + e);
+                }
+            }
+
+            if (!pdfAttachment) {
+                skippedItems.push(title || 'Unknown');
+                failCount++;
+                continue;
+            }
+
+            const metadata = await extractPatentInfoFromPdf(pdfAttachment);
+            if (metadata && (metadata.title || metadata.pubNumber || metadata.inventors?.length)) {
+                await applyMetadataFromPdf(item, metadata);
+                successCount++;
+                Zotero.debug('[Patent] Successfully extracted metadata for: ' + title);
+            } else {
+                skippedItems.push(title || 'Unknown');
+                failCount++;
+            }
+        } catch (err: any) {
+            Zotero.debug('[Patent] Error processing item: ' + (err.message || err));
+            skippedItems.push(title || 'Unknown');
+            failCount++;
+        }
+    }
+
+    let message = '完成：成功 ' + successCount + ' 个';
+    if (failCount > 0) {
+        message += '，失败 ' + failCount + ' 个';
+    }
+    if (skippedItems.length > 0) {
+        message += '（无PDF: ' + skippedItems.slice(0, 3).join(', ') + (skippedItems.length > 3 ? '...' : '') + ')';
+    }
+    showNotification(message);
+}
+
 async function applyMetadataToItem(item: any, metadata: any) {
     if (!item.setField) {
         Zotero.debug('applyMetadataToItem：item.setField 不可用');
@@ -340,10 +451,15 @@ async function applyMetadataFromPdf(item: any, metadata: PatentMetadata) {
 
     const newCreators: any[] = [];
 
+    // Use different creator type based on patent type
+    // invention: inventor, utility model: creator (or applicant)
+    const creatorType = metadata.patentType === 'utility' ? 'creator' : 'inventor';
+    Zotero.debug('[Patent] Using creatorType: ' + creatorType);
+
     if (metadata.inventors && metadata.inventors.length > 0) {
         for (const name of metadata.inventors) {
             newCreators.push({
-                creatorType: 'inventor',
+                creatorType: creatorType,
                 firstName: '',
                 lastName: name,
             });

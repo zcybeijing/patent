@@ -2,20 +2,30 @@
 
 中国专利管理插件 for Zotero
 
+## 版本
+
+**v1.1.0** - 批量处理与实用新型支持
+
 ## 功能
 
 ### ✅ 已完成
 
 1. **PDF元数据提取**
    - 从本地PDF文件提取专利信息：标题、申请号、申请日、发明人、申请人、摘要、IPC分类
-   - 支持新建条目时自动附加PDF并提取元数据
+   - 提取PDF首页完整文本（而非有限字数）
+   - 支持发明专利、实用新型专利、外观设计专利
+   - 自动识别专利类型，creator类型自动适配（发明专利用inventor，实用新型用creator）
 
-2. **CNIPA专利搜索**
+2. **批量处理**
+   - 支持选中多个专利条目批量提取PDF元数据
+   - 显示处理结果统计（成功/失败/跳过数量）
+
+3. **CNIPA专利搜索**
    - 通过HiddenBrowser加载中国专利局网站（epub.cnipa.gov.cn）
    - 获取CSRF令牌并构建POST搜索请求
    - 自动打开搜索结果（失败时fallback到Zotero内部浏览器）
 
-3. **专利PDF下载**
+4. **专利PDF下载**
    - 从CNIPA网站下载专利PDF
    - 自动附加到Zotero条目
 
@@ -55,6 +65,15 @@ npm run lint:check
 npm run lint:fix
 ```
 
+## 菜单功能
+
+| 菜单项 | 功能 |
+|--------|------|
+| 获取专利元数据 | 从PDF或CNIPA获取单个专利元数据 |
+| 获取专利文件 | 从CNIPA下载PDF并附加到条目 |
+| 打开中国专利网查询 | 在Zotero浏览器中打开CNIPA |
+| 批量获取专利元数据 | 选中多个专利条目批量提取PDF元数据 |
+
 ## 架构
 
 | 文件 | 功能 |
@@ -63,7 +82,7 @@ npm run lint:fix
 | `src/addon.ts` | Addon类，data/hooks/ztoolkit |
 | `src/hooks.ts` | 生命周期hooks |
 | `src/modules/patent.ts` | 专利菜单处理 |
-| `src/utils/pdfHelpers.ts` | PDF元数据提取 |
+| `src/utils/pdfHelpers.ts` | PDF元数据提取（支持多种专利类型） |
 | `src/utils/cnipaClient.ts` | CNIPA HTTP客户端（选择器脆弱） |
 | `src/utils/window.ts` | HiddenBrowser自动化、浏览器导航 |
 | `src/utils/uiHelpers.ts` | UI通知、对话框 |

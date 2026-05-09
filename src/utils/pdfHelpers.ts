@@ -10,6 +10,7 @@ export interface PatentMetadata {
     abstract?: string;
     country?: string;
     issuingAuthority?: string;
+    patentType?: 'invention' | 'utility' | 'design' | 'unknown';
 }
 
 export async function getAttachments(item: any): Promise<any[]> {
@@ -41,7 +42,7 @@ export async function extractTextFromPdf(attachmentItem: any, pageIndex: number 
     try {
         const itemID = attachmentItem.id || attachmentItem.getID?.();
         if (!itemID) throw new Error('Cannot get attachment ID');
-        Zotero.debug('[Patent] Extracting text from PDF item ID: ' + itemID);
+        Zotero.debug('[Patent] Extracting text from PDF item ID: ' + itemID + ', page: ' + pageIndex);
         if (Zotero.PDFWorker && typeof Zotero.PDFWorker.getFullText === 'function') {
             const result = await Zotero.PDFWorker.getFullText(itemID, pageIndex);
             if (result && result.text) {
@@ -58,8 +59,11 @@ export async function extractTextFromPdf(attachmentItem: any, pageIndex: number 
 }
 
 export async function extractPatentInfoFromPdf(attachmentItem: any): Promise<PatentMetadata> {
+    // Extract from the first full page of the PDF (not just first 500 chars)
     const text = await extractTextFromPdf(attachmentItem, 0);
-    Zotero.debug('[Patent] PDF raw text (first 500 chars): ' + text.substring(0, 500));
+    Zotero.debug('[Patent] PDF first page text length: ' + text.length);
+    // Log more for debugging
+    Zotero.debug('[Patent] PDF text around (57): ' + text.substring(text.indexOf('(57)') !== -1 ? text.indexOf('(57)') : 0, text.indexOf('(57)') !== -1 ? text.indexOf('(57)') + 500 : 1000));
     const metadata = parsePatentInfoFromText(text);
     Zotero.debug('[Patent] Parsed PDF metadata: ' + JSON.stringify(metadata));
     return metadata;
@@ -123,15 +127,27 @@ export function parsePatentInfoFromText(text: string): PatentMetadata {
         return orgKeywords.some((kw) => str.includes(kw));
     }
 
-    // Extract title (54) - improved to handle various formats
-    const nameMatch = cleanedText.match(/\(54\)[\s发明名称]*([\s\S]*?)(?=\(\s*57\s*\)|权利要求|[\n\r]{2,})/i);
-    if (nameMatch && nameMatch[1]) {
-        let title = nameMatch[1].trim().replace(/\s+/g, '');
-        // Remove trailing (57) or other tag markers
-        title = title.replace(/\s*\(57\)\s*.*$/i, '');
-        if (title && title.length > 1) {
-            result.title = title;
-            Zotero.debug('[Patent] Parsed title: ' + title);
+    // Extract title (54) - handle both invention patents (发明专利) and utility model patents (实用新型)
+    // Chinese patent PDF formats: 
+    // - (54)发明名称 for invention patents
+    // - (54)实用新型名称 for utility model patents
+    const namePatterns = [
+        // Match either 发明名称 or 实用新型名称
+        /\(\s*54\s*\)\s*(?:发明|实用新型)[名称]*\s*([^\(]+?)(?=\(\s*57\s*\))/i,
+        // Alternative fallback
+        /\(\s*54\s*\)[\s\S]*?(?=\(\s*57\s*\))/i,
+    ];
+    for (const pattern of namePatterns) {
+        const match = cleanedText.match(pattern);
+        if (match && match[1]) {
+            let title = match[1].trim().replace(/\s+/g, '');
+            // Remove leading "发明" or "实用新型" or "名称" if present
+            title = title.replace(/^(发明|实用新型)?名称/, '');
+            if (title && title.length > 2) {
+                result.title = title;
+                Zotero.debug('[Patent] Parsed title from (54): ' + title);
+                break;
+            }
         }
     }
 
@@ -216,12 +232,13 @@ export function parsePatentInfoFromText(text: string): PatentMetadata {
         }
     }
 
-    // Extract abstract (57)
-    const abstractMatch = cleanedText.match(/\(57\)\s*摘要\s*([\s\S]*?)(?=\s*\(\d{2}\)|权利要求)/i);
+    // Extract abstract (57) - handle formats like "(57)" or "( 57 )"
+    const abstractMatch = cleanedText.match(/\(\s*57\s*\)\s*摘要\s*([\s\S]*?)(?=\s*\(\d{2}\)|权利要求)/i);
     if (abstractMatch && abstractMatch[1]) {
-        let abstract = abstractMatch[1].trim().replace(/\s+/g, ' ');
+        let abstract = abstractMatch[1].trim().replace(/\s+/g, '');
         if (abstract && abstract.length > 5) {
             result.abstract = abstract;
+            Zotero.debug('[Patent] Parsed abstract: ' + abstract.substring(0, 100) + '...');
         }
     }
 
@@ -330,6 +347,18 @@ export function parsePatentInfoFromText(text: string): PatentMetadata {
     // Set default country and issuing authority
     result.country = 'CN';
     result.issuingAuthority = 'CNIPA';
+    
+    // Detect patent type from the PDF
+    if (/\(12\)[\s]*发明专利/i.test(cleanedText)) {
+        result.patentType = 'invention';
+        Zotero.debug('[Patent] Detected patent type: invention');
+    } else if (/\(12\)[\s]*实用新型/i.test(cleanedText)) {
+        result.patentType = 'utility';
+        Zotero.debug('[Patent] Detected patent type: utility');
+    } else if (/\(12\)[\s]*外观设计/i.test(cleanedText)) {
+        result.patentType = 'design';
+        Zotero.debug('[Patent] Detected patent type: design');
+    }
 
     Zotero.debug('[Patent] Final parsed metadata: ' + JSON.stringify(result));
     return result;
