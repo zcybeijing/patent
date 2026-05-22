@@ -7,7 +7,7 @@ import {
     PatentSearchResult,
 } from '../utils/cnipaClient';
 import { downloadPdfAndAttach, getAttachments, extractPatentInfoFromPdf, PatentMetadata } from '../utils/pdfHelpers';
-import { openCnipaBrowser } from '../utils/window';
+import { openCnipaBrowser } from '../utils/cnipaClient';
 
 let menuElements: Element[] = [];
 
@@ -72,9 +72,17 @@ export function registerMenu() {
     browserItem.setAttribute('image', 'chrome://zoteroPatent/content/icons/favicon.png');
     browserItem.addEventListener('command', async () => {
         Zotero.debug('[Patent] open browser menu clicked');
-        const items = Zotero.getActiveZoteroPane().getSelectedItems();
-        const title = items.length > 0 ? (items[0].getField ? items[0].getField('title') : items[0].title) : undefined;
-        await openCnipaBrowser(title);
+
+        try {
+            const items = Zotero.getActiveZoteroPane().getSelectedItems();
+            const title = items.length > 0 ? (items[0].getField ? items[0].getField('title') : items[0].title) : undefined;
+            Zotero.debug('[Patent] title: ' + title);
+
+            const result = await openCnipaBrowser(title);
+            Zotero.debug('[Patent] openCnipaBrowser result: ' + result);
+        } catch (e) {
+            Zotero.debug('[Patent] Menu handler error: ' + e);
+        }
     });
     popup.appendChild(browserItem);
     menuElements.push(browserItem);

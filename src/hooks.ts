@@ -1,7 +1,6 @@
 import { config } from '../package.json';
 import { initLocale } from './utils/locale';
 import PatentModule from './modules/patent';
-
 async function onStartup() {
     await Promise.all([Zotero.initializationPromise, Zotero.unlockPromise, Zotero.uiReadyPromise]);
 
