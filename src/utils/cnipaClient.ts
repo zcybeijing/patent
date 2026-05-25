@@ -387,160 +387,84 @@ export async function fetchPatentDetailPdfUrl(detailUrl?: string): Promise<strin
 export async function openCnipaBrowser(searchTitle) {
     Zotero.debug('[Patent] === START ===');
 
-    const win = Zotero.openInViewer('http://epub.cnipa.gov.cn/Advanced');
-    Zotero.Utilities.Internal.activate(win);
+    // 尝试 CDP 浏览器自动化
+    var useCDP = false;
+    try {
+        Zotero.debug('[Patent] 尝试 CDP 自动化...');
+        var cdp = await import('./cdpClient');
 
-    await new Promise((r) => {
-        if (win.document?.readyState === 'complete') { setTimeout(r, 100); }
-        else { win.addEventListener('load', r, { once: true }); }
-    });
+        var launched = await cdp.launchBrowser();
+        if (launched) {
+            var connected = await cdp.connectCDP();
+            if (connected) {
+                useCDP = true;
+                await cdp.createTab('about:blank');
 
-    const browser = win.document.querySelector('browser');
-    if (!browser) return false;
+                // 导航到 CNIPA Advanced
+                Zotero.debug('[Patent] CDP: 导航到 Advanced');
+                await cdp.navigateTo('http://epub.cnipa.gov.cn/Advanced');
+                await cdp.waitForElement('#query_form', 20000);
 
-    await new Promise((resolve) => {
-        let done = false;
-        const p = setInterval(() => {
-            try {
-                const cur = browser.currentURI?.spec;
-                if (cur && cur !== 'about:blank' && !done) { done = true; clearInterval(p); resolve(); }
-            } catch (_) {}
-        }, 300);
-        setTimeout(() => { if (!done) { done = true; clearInterval(p); resolve(); } }, 30000);
-    });
+                if (searchTitle) {
+                    // 填入搜索标题
+                    Zotero.debug('[Patent] CDP: 填入搜索词');
+                    await cdp.fillInput('input[name="searchCatalogInfo.Ti"]', searchTitle);
 
-    await new Promise((r) => setTimeout(r, 8000));
-    seedCookiesFromService();
+                    // 点击查询按钮
+                    Zotero.debug('[Patent] CDP: 点击查询');
+                    await cdp.clickElement('button[type="submit"].btn');
 
-    const mm = browser.messageManager || browser.frameLoader?.messageManager;
-    Zotero.debug('[Patent] mm 状态: ' + (mm ? '存在 browserURI=' + (browser.currentURI?.spec || 'null') : '为空'));
-    if (!mm || !searchTitle) return true;
+                    // 等待结果
+                    await cdp.waitForElement('[onclick*="zl_xm"]', 20000);
+                    Zotero.debug('[Patent] CDP: 搜索结果已加载');
 
-    const bootURI = (typeof rootURI !== 'undefined' ? rootURI : 'chrome://zoteroPatent/content/') + 'content/scripts/boot.js';
-    Zotero.debug('[Patent] 加载 boot: ' + bootURI);
-    mm.loadFrameScript(bootURI, true);
+                    // 提取专利号
+                    var pageText = await cdp.getPageText();
+                    var pubMatch = pageText.match(/CN\s*\d+[A-Z]?/);
+                    if (pubMatch) {
+                        Zotero.debug('[Patent] CDP 提取到专利号: ' + pubMatch[0]);
+                        showNotification('提取到: ' + pubMatch[0]);
+                    }
 
-    mm.addMessageListener('patent:status', function(e) { Zotero.debug('[Patent] 状态: ' + JSON.stringify(e.data)); });
-    mm.addMessageListener('patent:pdf', function(e) { Zotero.debug('[Patent] 专利号: ' + e.data.pub); showNotification('提取到: ' + e.data.pub); });
+                    // 点击第一个发明专利按钮
+                    var clicked = await cdp.clickElement('[onclick*="zl_xm"]');
+                    Zotero.debug('[Patent] CDP: 发明专利按钮点击: ' + clicked);
 
-    await new Promise((resolve) => {
-        mm.addMessageListener('patent:ready', function onReady() {
-            mm.removeMessageListener('patent:ready', onReady);
-            mm.sendAsyncMessage('patent:auto', { keyword: searchTitle });
-            resolve();
-        });
-        setTimeout(resolve, 15000);
-    });
+                    // 等待 SwDetail 页面
+                    await cdp.waitForElement('#patd', 15000);
+                    var swUrl = await cdp.evaluateJS('window.location.href');
+                    Zotero.debug('[Patent] CDP: 当前 URL: ' + swUrl);
 
-    await new Promise((resolve) => {
-        let done = false;
-        mm.addMessageListener('patent:status', function handler(e) {
-            if ((e.data.stage === 'sd' || e.data.stage === 'has_content') && !done) { done = true; resolve(); }
-        });
-        setTimeout(() => { if (!done) { done = true; resolve(); } }, 60000);
-    });
+                    // 提取 filedl 链接
+                    var swHtml = await cdp.evaluateJS('document.documentElement.outerHTML');
+                    var filedlMatch = (swHtml || '').match(/https?:\/\/egaz\.cnipa\.gov\.cn\/[^"'\s]*/);
+                    if (filedlMatch) {
+                        Zotero.debug('[Patent] CDP 发现 filedl: ' + filedlMatch[0]);
+                        showNotification('PDF 下载链接已获取');
+                    }
+                }
 
-    if (mm && searchTitle) {
-        try { await navigateAndDownload(mm, browser, searchTitle); }
-        catch (e) { Zotero.debug('[Patent] 方案A异常: ' + e); }
+                await cdp.disconnectCDP();
+                Zotero.debug('[Patent] CDP 自动化完成');
+            }
+        }
+    } catch (e) {
+        Zotero.debug('[Patent] CDP 自动化失败: ' + e);
+    }
+
+    // CDP 失败时的兜底：系统浏览器打开
+    if (!useCDP) {
+        try {
+            var uri = Services.io.newURI('http://epub.cnipa.gov.cn/Advanced', null, null);
+            var eps = Cc['@mozilla.org/uriloader/external-protocol-service;1'].getService(Ci.nsIExternalProtocolService);
+            eps.loadURI(uri);
+            Zotero.debug('[Patent] 系统浏览器已打开');
+            if (searchTitle) showNotification('请在浏览器中搜索: ' + searchTitle);
+        } catch (e) {
+            Zotero.debug('[Patent] 打开系统浏览器失败: ' + e);
+        }
     }
 
     Zotero.debug('[Patent] === END ===');
     return true;
-}
-
-async function navigateAndDownload(mm, browser, keyword) {
-    Zotero.debug('[Patent] 方案A: 通过现有 FS 导航');
-    if (!mm) { Zotero.debug('[Patent] 方案A: mm 为空'); return; }
-    const bootURI = (typeof rootURI !== 'undefined' ? rootURI : 'chrome://zoteroPatent/content/') + 'content/scripts/boot.js';
-
-    let savedSwParams = null;
-    let swParamsSent = false;
-    try { mm.addMessageListener('patent:navStatus', function(e) {
-        var d = e.data;
-        Zotero.debug('[Patent] 方案A: ' + JSON.stringify(d));
-        if (d.stage === 'matched' && d.an && !savedSwParams) {
-            savedSwParams = { an: d.an, pt: d.pt, ggr: d.ggr };
-            var curUrl = browser?.currentURI?.spec || '';
-            if (curUrl.indexOf('/Dxb/AdvancedQuery') >= 0) {
-                Zotero.debug('[Patent] 方案A: 已在 AdvQuery，发 swParams');
-                swParamsSent = true;
-                setTimeout(function() {
-                    mm.sendAsyncMessage('patent:swParams', { an: d.an, pt: d.pt, ggr: d.ggr });
-                }, 500);
-            } else {
-                Zotero.debug('[Patent] 方案A: 导航到 /Dxb/AdvancedQuery');
-                try {
-                    var uri = Services.io.newURI('http://epub.cnipa.gov.cn/Dxb/AdvancedQuery', null, null);
-                    browser.loadURI(uri, { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() });
-                } catch (e) { Zotero.debug('[Patent] 方案A: 导航失败: ' + e); }
-            }
-        }
-    }); } catch (e) { Zotero.debug('[Patent] 方案A: navStatus注册失败'); }
-
-    // 导航后等待页面加载 + 发送 swParams（备用）
-    try { mm.addMessageListener('patent:status', function onBoot(e) {
-        var d2 = e.data;
-        if (d2.stage === 'boot_run' && d2.url.indexOf('/Dxb/AdvancedQuery') >= 0 && savedSwParams && !swParamsSent) {
-            swParamsSent = true;
-            Zotero.debug('[Patent] 方案A: 备用发 swParams');
-            setTimeout(function() {
-                mm.sendAsyncMessage('patent:swParams', { an: savedSwParams.an, pt: savedSwParams.pt, ggr: savedSwParams.ggr });
-            }, 500);
-        }
-    }); } catch (e) {}
-    
-    // 等待 /Dxb/AdvancedQuery（避免与 iframe 加载冲突，boot 重载改到更晚）
-    await new Promise((resolve) => {
-        const p = setInterval(() => {
-            try {
-                const cur = browser?.currentURI?.spec;
-                if (cur && cur.indexOf('/Dxb/AdvancedQuery') >= 0) {
-                    clearInterval(p);
-                    Zotero.debug('[Patent] 方案A: 已到达 /Dxb/AdvancedQuery');
-                    resolve();
-                }
-            } catch (_) {}
-        }, 300);
-        setTimeout(() => { clearInterval(p); resolve(); }, 20000);
-    });
-
-    try { mm.addMessageListener('patent:pdf', function(e) {
-        if (e.data.url) { Zotero.debug('[Patent] PDF链接: ' + e.data.url); showNotification('PDF 下载链接已获取'); }
-    }); } catch (e) {}
-
-    try { mm.addMessageListener('patent:savePage', function(e) {
-        if (!e.data.html) return;
-        try {
-            var tmpFile = Cc['@mozilla.org/file/directory_service;1'].getService(Ci.nsIProperties).get('TmpD', Ci.nsIFile);
-            tmpFile.append('cnipa_page_' + Date.now() + '.html');
-            var fos = Cc['@mozilla.org/network/file-output-stream;1'].createInstance(Ci.nsIFileOutputStream);
-            fos.init(tmpFile, 0x02 | 0x08 | 0x20, 0o666, 0);
-            var converter = Cc['@mozilla.org/intl/converter-output-stream;1'].createInstance(Ci.nsIConverterOutputStream);
-            converter.init(fos, 'UTF-8');
-            converter.writeString(e.data.html);
-            converter.close();
-            Zotero.debug('[Patent] 页面已保存到: ' + tmpFile.path);
-            showNotification('页面已保存: ' + tmpFile.path);
-        } catch (ex) { Zotero.debug('[Patent] 保存失败: ' + ex); }
-    }); } catch (e) {}
-
-    Zotero.debug('[Patent] 方案A: 发送 doNav');
-    mm.sendAsyncMessage('patent:doNav', { keyword: keyword });
-
-    await new Promise((resolve) => {
-        let done = false;
-        const p = setInterval(() => {
-            try {
-                const cur = browser?.currentURI?.spec;
-                if (cur && cur.indexOf('/Sw/SwDetail') >= 0 && !done) {
-                    done = true; clearInterval(p);
-                    Zotero.debug('[Patent] 方案A: 已到达 SwDetail');
-                    try { mm.loadFrameScript(bootURI, true); Zotero.debug('[Patent] 方案A: boot re-loaded'); } catch (e) {}
-                    resolve();
-                }
-            } catch (_) {}
-        }, 500);
-        setTimeout(() => { if (!done) { done = true; clearInterval(p); Zotero.debug('[Patent] 方案A: 超时'); resolve(); } }, 30000);
-    });
 }
