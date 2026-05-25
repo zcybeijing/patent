@@ -1,6 +1,30 @@
 ﻿(function(){
 sendAsyncMessage('patent:status',{stage:'boot_run',url:content.location.href});
 sendAsyncMessage('patent:ready',{});
+// 接收父进程发来的 SwDetail 参数
+addMessageListener('patent:swParams',function(m){
+sendAsyncMessage('patent:navStatus',{stage:'swParams_received',url:content.location.href});
+try{
+// 用 XHR 请求 /Dxb/AdvancedQuery（pcap 显示此接口返回 JSON 格式的专利详情数据）
+var body='an='+encodeURIComponent(m.data.an)+'&pubType='+(m.data.pt||'3')+'&ggr='+(m.data.ggr||'');
+var tk=content.document.querySelector('input[name="__RequestVerificationToken"]');
+if(tk)body+='&__RequestVerificationToken='+encodeURIComponent(tk.value);
+sendAsyncMessage('patent:navStatus',{stage:'xhr_adv',bodyLen:body.length});
+var x=new XMLHttpRequest();
+x.open('POST','http://epub.cnipa.gov.cn/Dxb/AdvancedQuery',true);
+x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');
+x.setRequestHeader('Referer','http://epub.cnipa.gov.cn/Dxb/AdvancedQuery');
+x.setRequestHeader('Origin','http://epub.cnipa.gov.cn');
+x.onload=function(){
+var resp=x.responseText||'';
+sendAsyncMessage('patent:navStatus',{stage:'adv_resp',status:x.status,len:resp.length,preview:resp.substring(0,600)});
+var fm=resp.match(/https?:\/\/egaz\.cnipa\.gov\.cn[^"'\s]*/);if(fm)sendAsyncMessage('patent:pdf',{url:fm[0]});
+else{var pm=resp.match(/(filedl|showpdf)[^"'\s]*/);if(pm)sendAsyncMessage('patent:pdf',{url:'http://egaz.cnipa.gov.cn/'+pm[0]});}
+};
+x.onerror=function(){sendAsyncMessage('patent:navStatus',{stage:'xhr_err'});};
+x.send(body);
+}catch(e){sendAsyncMessage('patent:navStatus',{stage:'swParams_err',msg:e.message});}
+});
 var Si=function(f,d){return content.setInterval(f,d)};
 var Ci=function(i){return content.clearInterval(i)};
 addMessageListener('patent:auto',function(m){
@@ -140,39 +164,11 @@ sendAsyncMessage('patent:navStatus',{stage:'btn_check',idx:oi,an:an,ctxMatch:ctx
 if(ctxMatch){targetBtn=ons[oi];targetAn=an;break;}
 }
 if(targetBtn){
+sendAsyncMessage('patent:navStatus',{stage:'matched_start'});
 var oc2=targetBtn.getAttribute('onclick')||'';
 var p2=oc2.match(/'([^']+)'/g)||[];
 var an2=(p2[0]||'').replace(/'/g,''),pt2=(p2[1]||'').replace(/'/g,''),ggr2=(p2[2]||'').replace(/'/g,'');
-sendAsyncMessage('patent:navStatus',{stage:'matched',an:an2});
-// 检查 token
-var ti2=content.document.querySelector('input[name="__RequestVerificationToken"]');
-sendAsyncMessage('patent:navStatus',{stage:'token_check',has:!!ti2,val:(ti2?ti2.value.substring(0,20):'')});
-var body2='an='+encodeURIComponent(an2)+'&pubType='+pt2+'&ggr='+ggr2+(ti2?'&__RequestVerificationToken='+encodeURIComponent(ti2.value):'');
-// 先 GET /Dxb/AdvancedQuery 获取新 token 和 session
-var getXHR=new XMLHttpRequest();
-getXHR.open('GET','http://epub.cnipa.gov.cn/Dxb/AdvancedQuery',false);
-getXHR.send();
-var tp2=getXHR.responseText.match(/__RequestVerificationToken[^>]*value="([^"]+)"/);
-var freshToken=tp2?tp2[1]:'';
-sendAsyncMessage('patent:navStatus',{stage:'fresh_token',has:!!freshToken});
-var freshBody='an='+encodeURIComponent(an2)+'&pubType='+pt2+'&ggr='+ggr2+(freshToken?'&__RequestVerificationToken='+encodeURIComponent(freshToken):'');
-var xhr2=new XMLHttpRequest();
-xhr2.open('POST','http://epub.cnipa.gov.cn/Sw/SwDetail',true);
-xhr2.setRequestHeader('Content-Type','application/x-www-form-urlencoded');
-xhr2.setRequestHeader('Referer','http://epub.cnipa.gov.cn/Dxb/AdvancedQuery');
-xhr2.setRequestHeader('Origin','http://epub.cnipa.gov.cn');
-xhr2.onload=function(){
-var resp=xhr2.responseText||'';
-sendAsyncMessage('patent:navStatus',{stage:'sw_resp',status:xhr2.status,len:resp.length,preview:resp.substring(0,500)});
-if(resp){
-var fm=resp.match(/https?:\/\/egaz\.cnipa\.gov\.cn\/(filedl|showpdf)[^"'\s]*/);
-if(fm){sendAsyncMessage('patent:pdf',{url:fm[0]});return;}
-var pm=resp.match(/\/filedl[^"'\s]*/);
-if(pm){sendAsyncMessage('patent:pdf',{url:'http://egaz.cnipa.gov.cn'+pm[0]});return;}
-}
-};
-xhr2.onerror=function(){sendAsyncMessage('patent:navStatus',{stage:'xhr_err'});};
-xhr2.send(body2);
+sendAsyncMessage('patent:navStatus',{stage:'matched',an:an2,pt:pt2,ggr:ggr2,url:content.location.href.substring(0,60)});
 return;
 }
 sendAsyncMessage('patent:navStatus',{stage:'err',msg:'no zl_xm param'});

@@ -454,18 +454,79 @@ async function navigateAndDownload(mm, browser, keyword) {
     if (!mm) { Zotero.debug('[Patent] 方案A: mm 为空'); return; }
     const bootURI = (typeof rootURI !== 'undefined' ? rootURI : 'chrome://zoteroPatent/content/') + 'content/scripts/boot.js';
 
+    let savedSwParams = null;
+    let swParamsSent = false;
     try { mm.addMessageListener('patent:navStatus', function(e) {
-        Zotero.debug('[Patent] 方案A: ' + JSON.stringify(e.data));
+        var d = e.data;
+        Zotero.debug('[Patent] 方案A: ' + JSON.stringify(d));
+        if (d.stage === 'matched' && d.an && !savedSwParams) {
+            savedSwParams = { an: d.an, pt: d.pt, ggr: d.ggr };
+            var curUrl = browser?.currentURI?.spec || '';
+            if (curUrl.indexOf('/Dxb/AdvancedQuery') >= 0) {
+                Zotero.debug('[Patent] 方案A: 已在 AdvQuery，发 swParams');
+                swParamsSent = true;
+                setTimeout(function() {
+                    mm.sendAsyncMessage('patent:swParams', { an: d.an, pt: d.pt, ggr: d.ggr });
+                }, 500);
+            } else {
+                Zotero.debug('[Patent] 方案A: 导航到 /Dxb/AdvancedQuery');
+                try {
+                    var uri = Services.io.newURI('http://epub.cnipa.gov.cn/Dxb/AdvancedQuery', null, null);
+                    browser.loadURI(uri, { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() });
+                } catch (e) { Zotero.debug('[Patent] 方案A: 导航失败: ' + e); }
+            }
+        }
     }); } catch (e) { Zotero.debug('[Patent] 方案A: navStatus注册失败'); }
+
+    // 导航后等待页面加载 + 发送 swParams（备用）
+    try { mm.addMessageListener('patent:status', function onBoot(e) {
+        var d2 = e.data;
+        if (d2.stage === 'boot_run' && d2.url.indexOf('/Dxb/AdvancedQuery') >= 0 && savedSwParams && !swParamsSent) {
+            swParamsSent = true;
+            Zotero.debug('[Patent] 方案A: 备用发 swParams');
+            setTimeout(function() {
+                mm.sendAsyncMessage('patent:swParams', { an: savedSwParams.an, pt: savedSwParams.pt, ggr: savedSwParams.ggr });
+            }, 500);
+        }
+    }); } catch (e) {}
+    
+    // 等待 /Dxb/AdvancedQuery（避免与 iframe 加载冲突，boot 重载改到更晚）
+    await new Promise((resolve) => {
+        const p = setInterval(() => {
+            try {
+                const cur = browser?.currentURI?.spec;
+                if (cur && cur.indexOf('/Dxb/AdvancedQuery') >= 0) {
+                    clearInterval(p);
+                    Zotero.debug('[Patent] 方案A: 已到达 /Dxb/AdvancedQuery');
+                    resolve();
+                }
+            } catch (_) {}
+        }, 300);
+        setTimeout(() => { clearInterval(p); resolve(); }, 20000);
+    });
 
     try { mm.addMessageListener('patent:pdf', function(e) {
         if (e.data.url) { Zotero.debug('[Patent] PDF链接: ' + e.data.url); showNotification('PDF 下载链接已获取'); }
     }); } catch (e) {}
 
+    try { mm.addMessageListener('patent:savePage', function(e) {
+        if (!e.data.html) return;
+        try {
+            var tmpFile = Cc['@mozilla.org/file/directory_service;1'].getService(Ci.nsIProperties).get('TmpD', Ci.nsIFile);
+            tmpFile.append('cnipa_page_' + Date.now() + '.html');
+            var fos = Cc['@mozilla.org/network/file-output-stream;1'].createInstance(Ci.nsIFileOutputStream);
+            fos.init(tmpFile, 0x02 | 0x08 | 0x20, 0o666, 0);
+            var converter = Cc['@mozilla.org/intl/converter-output-stream;1'].createInstance(Ci.nsIConverterOutputStream);
+            converter.init(fos, 'UTF-8');
+            converter.writeString(e.data.html);
+            converter.close();
+            Zotero.debug('[Patent] 页面已保存到: ' + tmpFile.path);
+            showNotification('页面已保存: ' + tmpFile.path);
+        } catch (ex) { Zotero.debug('[Patent] 保存失败: ' + ex); }
+    }); } catch (e) {}
+
     Zotero.debug('[Patent] 方案A: 发送 doNav');
     mm.sendAsyncMessage('patent:doNav', { keyword: keyword });
-    setTimeout(function() { mm.sendAsyncMessage('patent:doNav', { keyword: keyword }); }, 3000);
-    setTimeout(function() { mm.sendAsyncMessage('patent:doNav', { keyword: keyword }); }, 7000);
 
     await new Promise((resolve) => {
         let done = false;

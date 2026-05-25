@@ -63,7 +63,13 @@ export async function extractPatentInfoFromPdf(attachmentItem: any): Promise<Pat
     const text = await extractTextFromPdf(attachmentItem, 0);
     Zotero.debug('[Patent] PDF first page text length: ' + text.length);
     // Log more for debugging
-    Zotero.debug('[Patent] PDF text around (57): ' + text.substring(text.indexOf('(57)') !== -1 ? text.indexOf('(57)') : 0, text.indexOf('(57)') !== -1 ? text.indexOf('(57)') + 500 : 1000));
+    Zotero.debug(
+        '[Patent] PDF text around (57): ' +
+            text.substring(
+                text.indexOf('(57)') !== -1 ? text.indexOf('(57)') : 0,
+                text.indexOf('(57)') !== -1 ? text.indexOf('(57)') + 500 : 1000,
+            ),
+    );
     const metadata = parsePatentInfoFromText(text);
     Zotero.debug('[Patent] Parsed PDF metadata: ' + JSON.stringify(metadata));
     return metadata;
@@ -128,7 +134,7 @@ export function parsePatentInfoFromText(text: string): PatentMetadata {
     }
 
     // Extract title (54) - handle both invention patents (发明专利) and utility model patents (实用新型)
-    // Chinese patent PDF formats: 
+    // Chinese patent PDF formats:
     // - (54)发明名称 for invention patents
     // - (54)实用新型名称 for utility model patents
     const namePatterns = [
@@ -216,7 +222,10 @@ export function parsePatentInfoFromText(text: string): PatentMetadata {
     if (ipcMatch && ipcMatch[1]) {
         let ipc = ipcMatch[1].trim();
         // Clean up - remove extra spaces
-        ipc = ipc.replace(/\s+/g, ' ').replace(/\(.*?\)/g, '').trim();
+        ipc = ipc
+            .replace(/\s+/g, ' ')
+            .replace(/\(.*?\)/g, '')
+            .trim();
         if (ipc && ipc.length > 2) {
             result.extra = 'IPC: ' + ipc;
             Zotero.debug('[Patent] Parsed IPC: ' + ipc);
@@ -347,7 +356,7 @@ export function parsePatentInfoFromText(text: string): PatentMetadata {
     // Set default country and issuing authority
     result.country = 'CN';
     result.issuingAuthority = 'CNIPA';
-    
+
     // Detect patent type from the PDF
     if (/\(12\)[\s]*发明专利/i.test(cleanedText)) {
         result.patentType = 'invention';
