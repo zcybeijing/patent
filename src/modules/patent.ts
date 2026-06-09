@@ -4,10 +4,11 @@ import {
     searchCnipaByTitle,
     fetchPatentDetailPdfUrl,
     fetchPatentDetails,
+    cnipaGetPdfUrlViaCdp,
+    downloadPdfViaCdp,
     PatentSearchResult,
 } from '../utils/cnipaClient';
 import { downloadPdfAndAttach, getAttachments, extractPatentInfoFromPdf, PatentMetadata } from '../utils/pdfHelpers';
-import { openCnipaBrowser } from '../utils/cnipaClient';
 
 let menuElements: Element[] = [];
 
@@ -50,42 +51,68 @@ export function registerMenu() {
     popup.appendChild(metadataItem);
     menuElements.push(metadataItem);
 
-    // File menu item
+    // Get patent file (CDP browser automation + PDF download)
     const fileItem = doc.createXULElement('menuitem');
     fileItem.id = config.addonRef + '-get-file';
-    fileItem.setAttribute('label', '获取专利文件');
+    fileItem.setAttribute('label', '查询并下载专利文件');
     fileItem.setAttribute('image', 'chrome://zoteroPatent/content/icons/favicon.png');
     fileItem.addEventListener('command', async () => {
-        Zotero.debug('[Patent] file menu clicked');
+        Zotero.debug('[Patent] get-file menu clicked');
         const items = Zotero.getActiveZoteroPane().getSelectedItems();
-        if (items.length > 0) {
-            await handleGetFile(items[0]);
+        if (items.length === 0) {
+            showNotification('请选中一个专利条目');
+            return;
+        }
+        const item = items[0];
+        const title = item.getField ? item.getField('title') : item.title;
+        if (!title) {
+            showNotification('条目没有标题');
+            return;
+        }
+        showNotification('正在查询并下载专利 PDF……');
+        try {
+            const pdfUrl = await cnipaGetPdfUrlViaCdp(title);
+            if (pdfUrl) {
+                // 用 CDP 浏览器下载（有 CNIPA 会话，避免 502）
+                const safeTitle = (title || 'patent').replace(/[/\\?%*:|"<>]/g, '').replace(/\s+/g, '_').substring(0, 100);
+                const filename = safeTitle + '.pdf';
+                const tmpDir = Cc['@mozilla.org/file/directory_service;1'].getService(Ci.nsIProperties).get('TmpD', Ci.nsIFile);
+                tmpDir.append('zoteropatent');
+                if (!tmpDir.exists()) tmpDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o777);
+                const tmpFile = tmpDir.clone();
+                tmpFile.append(filename);
+                const savePath = tmpFile.path;
+                const downloaded = await downloadPdfViaCdp(pdfUrl, savePath);
+                if (downloaded) {
+                    // 移除旧的 PDF 附件
+                    const oldAttachments = await getAttachments(item);
+                    for (const old of oldAttachments) {
+                        let ct = '';
+                        if (old.attachmentContentType) ct = old.attachmentContentType;
+                        else if (typeof old.getField === 'function') try { ct = old.getField('contentType') || ''; } catch {}
+                        if (ct === 'application/pdf') {
+                            Zotero.debug('[Patent] 移除旧附件: ' + old.id);
+                            await Zotero.Items.remove(old.id);
+                        }
+                    }
+                    await Zotero.Attachments.importFromFile({ file: savePath, parentItemID: item.id });
+                    showNotification('PDF 已下载并附加到条目');
+                } else {
+                    // 降级：Zotero HTTP 下载
+                    showNotification('CDP 下载失败，尝试 HTTP 下载...');
+                    const ok = await downloadPdfAndAttach(item, pdfUrl);
+                    showNotification(ok ? 'PDF 已下载并附加到条目' : '下载专利文件失败');
+                }
+            } else {
+                showNotification('未能获取 PDF 下载地址');
+            }
+        } catch (e) {
+            Zotero.debug('[Patent] get-file error: ' + e);
+            showNotification('查询失败：' + e);
         }
     });
     popup.appendChild(fileItem);
     menuElements.push(fileItem);
-
-    // Open browser menu item
-    const browserItem = doc.createXULElement('menuitem');
-    browserItem.id = config.addonRef + '-open-browser';
-    browserItem.setAttribute('label', '打开中国专利网查询');
-    browserItem.setAttribute('image', 'chrome://zoteroPatent/content/icons/favicon.png');
-    browserItem.addEventListener('command', async () => {
-        Zotero.debug('[Patent] open browser menu clicked');
-
-        try {
-            const items = Zotero.getActiveZoteroPane().getSelectedItems();
-            const title = items.length > 0 ? (items[0].getField ? items[0].getField('title') : items[0].title) : undefined;
-            Zotero.debug('[Patent] title: ' + title);
-
-            const result = await openCnipaBrowser(title);
-            Zotero.debug('[Patent] openCnipaBrowser result: ' + result);
-        } catch (e) {
-            Zotero.debug('[Patent] Menu handler error: ' + e);
-        }
-    });
-    popup.appendChild(browserItem);
-    menuElements.push(browserItem);
 
     // Batch metadata menu item
     const batchMetadataItem = doc.createXULElement('menuitem');
@@ -102,15 +129,30 @@ export function registerMenu() {
     popup.appendChild(batchMetadataItem);
     menuElements.push(batchMetadataItem);
 
+    // Batch download menu item
+    const batchFileItem = doc.createXULElement('menuitem');
+    batchFileItem.id = config.addonRef + '-batch-file';
+    batchFileItem.setAttribute('label', '批量获取专利文件');
+    batchFileItem.setAttribute('image', 'chrome://zoteroPatent/content/icons/favicon.png');
+    batchFileItem.addEventListener('command', async () => {
+        Zotero.debug('[Patent] batch file menu clicked');
+        const items = Zotero.getActiveZoteroPane().getSelectedItems();
+        if (items.length > 0) {
+            await handleBatchDownload(items);
+        }
+    });
+    popup.appendChild(batchFileItem);
+    menuElements.push(batchFileItem);
+
     // Show/hide menus based on selection
     popup.addEventListener('popupshowing', () => {
         const items = Zotero.getActiveZoteroPane().getSelectedItems();
         const hasPatent = items.some((item: any) => item.itemType === 'patent');
         separator.hidden = !hasPatent;
-        metadataItem.hidden = !hasPatent;
         fileItem.hidden = !hasPatent;
+        metadataItem.hidden = !hasPatent;
         batchMetadataItem.hidden = !hasPatent || items.length < 2;
-        browserItem.hidden = false; // Browser is always available
+        batchFileItem.hidden = !hasPatent || items.length < 2;
         Zotero.debug('[Patent] popupshowing: hasPatent=' + hasPatent + ', count=' + items.length);
     });
 
@@ -227,56 +269,6 @@ async function handleGetMetadata(item: any) {
     }
 }
 
-async function handleGetFile(item: any) {
-    Zotero.debug('[Patent] handleGetFile called, item: ' + (item ? 'exists' : 'null'));
-    if (!item) {
-        showNotification('未选中条目');
-        return;
-    }
-
-    // Check item type - use itemTypeID or itemType string
-    const itemTypeID = item.itemTypeID;
-    const itemTypeName = item.itemType;
-    Zotero.debug('[Patent] File - itemTypeID: ' + itemTypeID + ', itemTypeName: ' + itemTypeName);
-
-    const patentTypeID = Zotero.ItemTypes.getID('patent');
-    if (itemTypeID !== patentTypeID && itemTypeName?.toLowerCase() !== 'patent') {
-        Zotero.debug('[Patent] Not a patent item');
-        showNotification('请选中类型为专利的条目');
-        return;
-    }
-
-    const title = item.getField ? item.getField('title') : item.title;
-    const appNumber = item.getField ? item.getField('applicationNumber') : item.applicationNumber;
-    Zotero.debug('[Patent] Title: ' + title + ', AppNum: ' + appNumber);
-    if (!title) {
-        showNotification('条目没有标题，无法搜索');
-        return;
-    }
-    showNotification('正在查询并下载专利 PDF……');
-    try {
-        const searchTerm = appNumber ? `${title} ${appNumber}` : title;
-        const results = await searchCnipaByTitle(searchTerm);
-        if (!results || results.length === 0) {
-            showNotification('未找到匹配的专利');
-            return;
-        }
-        const chosen: PatentSearchResult =
-            results.length === 1 ? results[0] : await askUserToPick(results, '选择专利记录');
-        if (!chosen) return;
-        const pdfUrl = await fetchPatentDetailPdfUrl(chosen.detailUrl);
-        if (!pdfUrl) {
-            showNotification('未能找到 PDF 下载地址');
-            return;
-        }
-        await downloadPdfAndAttach(item, pdfUrl, (chosen.title || 'patent') + '.pdf');
-        showNotification('PDF 已下载并附加到条目');
-    } catch (err: any) {
-        Zotero.debug('下载专利文件失败: ' + (err.message || err));
-        showNotification('下载专利文件失败：' + (err.message || err));
-    }
-}
-
 async function handleBatchMetadata(items: any[]) {
     Zotero.debug('[Patent] handleBatchMetadata called, count: ' + items.length);
 
@@ -368,6 +360,152 @@ async function handleBatchMetadata(items: any[]) {
     }
     if (skippedItems.length > 0) {
         message += '（无PDF: ' + skippedItems.slice(0, 3).join(', ') + (skippedItems.length > 3 ? '...' : '') + ')';
+    }
+    showNotification(message);
+}
+
+async function handleBatchDownload(items: any[]) {
+    Zotero.debug('[Patent] handleBatchDownload called, count: ' + items.length);
+
+    const patentTypeID = Zotero.ItemTypes.getID('patent');
+    const patentItems = items.filter((item: any) => {
+        const itemTypeID = item.itemTypeID;
+        const itemTypeName = item.itemType;
+        return itemTypeID === patentTypeID || itemTypeName?.toLowerCase() === 'patent';
+    });
+
+    if (patentItems.length === 0) {
+        showNotification('请选中专利类型的条目');
+        return;
+    }
+
+    showNotification('正在批量下载 ' + patentItems.length + ' 个专利文件...');
+
+    let successCount = 0;
+    let failCount = 0;
+    const failedItems: string[] = [];
+
+    for (let i = 0; i < patentItems.length; i++) {
+        const item = patentItems[i];
+        const title = item.getField ? item.getField('title') : item.title;
+        Zotero.debug('[Patent] Batch downloading ' + (i + 1) + '/' + patentItems.length + ': ' + title);
+
+        // Check if item already has a PDF attachment
+        try {
+            const attachments = await getAttachments(item);
+            let hasPdf = false;
+            for (const att of attachments) {
+                let filename = '';
+                let contentType = '';
+                if (typeof att.getFilename === 'function') {
+                    filename = await att.getFilename();
+                } else if (typeof att.getField === 'function') {
+                    try {
+                        filename = att.getField('filename') || '';
+                    } catch {}
+                }
+                if (!filename && att.attachmentFilename) {
+                    filename = att.attachmentFilename;
+                }
+                if (att.attachmentContentType) {
+                    contentType = att.attachmentContentType;
+                } else if (typeof att.getField === 'function') {
+                    try {
+                        contentType = att.getField('contentType') || '';
+                    } catch {}
+                }
+                if (contentType === 'application/pdf' || filename?.toLowerCase().endsWith('.pdf')) {
+                    hasPdf = true;
+                    break;
+                }
+            }
+            if (hasPdf) {
+                Zotero.debug('[Patent] Item already has PDF, skipping: ' + title);
+                successCount++;
+                continue;
+            }
+        } catch (e) {
+            Zotero.debug('[Patent] Error checking attachments: ' + e);
+        }
+
+        // Try to download PDF
+        try {
+            const appNumber = item.getField ? item.getField('applicationNumber') : item.applicationNumber;
+            const searchTerm = appNumber ? `${title} ${appNumber}` : title;
+
+            let pdfUrl: string | undefined;
+
+            // Try HTTP first
+            try {
+                const results = await searchCnipaByTitle(searchTerm);
+                if (results && results.length > 0) {
+                    const chosen = results[0];
+                    pdfUrl = await fetchPatentDetailPdfUrl(chosen.detailUrl);
+                }
+            } catch (err: any) {
+                Zotero.debug('[Patent] HTTP search failed for: ' + title + ', ' + (err.message || err));
+            }
+
+            // Fallback to CDP
+            if (!pdfUrl) {
+                try {
+                    pdfUrl = await cnipaGetPdfUrlViaCdp(title);
+                } catch (err: any) {
+                    Zotero.debug('[Patent] CDP failed for: ' + title + ', ' + (err.message || err));
+                }
+            }
+
+            if (pdfUrl) {
+                const safeTitle = (title || 'patent').replace(/[/\\?%*:|"<>]/g, '').replace(/\s+/g, '_').substring(0, 100);
+                const filename = safeTitle + '.pdf';
+                const tmpDir = Cc['@mozilla.org/file/directory_service;1'].getService(Ci.nsIProperties).get('TmpD', Ci.nsIFile);
+                tmpDir.append('zoteropatent');
+                if (!tmpDir.exists()) tmpDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o777);
+                const tmpFile = tmpDir.clone();
+                tmpFile.append(filename);
+                const savePath = tmpFile.path;
+                const downloaded = await downloadPdfViaCdp(pdfUrl, savePath);
+                let ok = false;
+                if (downloaded) {
+                    const oldAttachments = await getAttachments(item);
+                    for (const old of oldAttachments) {
+                        let ct = '';
+                        if (old.attachmentContentType) ct = old.attachmentContentType;
+                        else if (typeof old.getField === 'function') try { ct = old.getField('contentType') || ''; } catch {}
+                        if (ct === 'application/pdf') {
+                            Zotero.debug('[Patent] 移除旧附件: ' + old.id);
+                            await Zotero.Items.remove(old.id);
+                        }
+                    }
+                    await Zotero.Attachments.importFromFile({ file: savePath, parentItemID: item.id });
+                    ok = true;
+                } else {
+                    ok = await downloadPdfAndAttach(item, pdfUrl);
+                }
+                if (ok) {
+                    successCount++;
+                    Zotero.debug('[Patent] Successfully downloaded PDF for: ' + title);
+                } else {
+                    failCount++;
+                    failedItems.push(title || 'Unknown');
+                }
+            } else {
+                failCount++;
+                failedItems.push(title || 'Unknown');
+            }
+        } catch (err: any) {
+            Zotero.debug('[Patent] Error downloading for: ' + title + ', ' + (err.message || err));
+            failCount++;
+            failedItems.push(title || 'Unknown');
+        }
+    }
+
+    let message = '完成：成功 ' + successCount + ' 个';
+    if (failCount > 0) {
+        message += '，失败 ' + failCount + ' 个';
+    }
+    if (failedItems.length > 0) {
+        message += '（' + failedItems.slice(0, 3).join(', ') + (failedItems.length > 3 ? '...' : '') + '）';
     }
     showNotification(message);
 }
@@ -493,5 +631,4 @@ export default {
     registerMenu,
     unregisterMenu,
     handleGetMetadata,
-    handleGetFile,
 };

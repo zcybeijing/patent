@@ -67,25 +67,25 @@ npm run lint:fix
 
 ## 菜单功能
 
-| 菜单项 | 功能 |
-|--------|------|
-| 获取专利元数据 | 从PDF或CNIPA获取单个专利元数据 |
-| 获取专利文件 | 从CNIPA下载PDF并附加到条目 |
-| 打开中国专利网查询 | 在Zotero浏览器中打开CNIPA |
+| 菜单项             | 功能                              |
+| ------------------ | --------------------------------- |
+| 获取专利元数据     | 从PDF或CNIPA获取单个专利元数据    |
+| 获取专利文件       | 从CNIPA下载PDF并附加到条目        |
+| 打开中国专利网查询 | 在Zotero浏览器中打开CNIPA         |
 | 批量获取专利元数据 | 选中多个专利条目批量提取PDF元数据 |
 
 ## 架构
 
-| 文件 | 功能 |
-|------|------|
-| `src/index.ts` | 入口，注册 `Zotero.ZoteroPatent` |
-| `src/addon.ts` | Addon类，data/hooks/ztoolkit |
-| `src/hooks.ts` | 生命周期hooks |
-| `src/modules/patent.ts` | 专利菜单处理 |
-| `src/utils/pdfHelpers.ts` | PDF元数据提取（支持多种专利类型） |
-| `src/utils/cnipaClient.ts` | CNIPA HTTP客户端（选择器脆弱） |
-| `src/utils/window.ts` | HiddenBrowser自动化、浏览器导航 |
-| `src/utils/uiHelpers.ts` | UI通知、对话框 |
+| 文件                       | 功能                              |
+| -------------------------- | --------------------------------- |
+| `src/index.ts`             | 入口，注册 `Zotero.ZoteroPatent`  |
+| `src/addon.ts`             | Addon类，data/hooks/ztoolkit      |
+| `src/hooks.ts`             | 生命周期hooks                     |
+| `src/modules/patent.ts`    | 专利菜单处理                      |
+| `src/utils/pdfHelpers.ts`  | PDF元数据提取（支持多种专利类型） |
+| `src/utils/cnipaClient.ts` | CNIPA HTTP客户端（选择器脆弱）    |
+| `src/utils/window.ts`      | HiddenBrowser自动化、浏览器导航   |
+| `src/utils/uiHelpers.ts`   | UI通知、对话框                    |
 
 ## 注意事项
 

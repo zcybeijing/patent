@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Zotero Patent Helper",
-  "version": "0.0.1",
+  "version": "2.0.0",
   "description": "从中国专利网抓取专利元数据并下载 PDF",
   "icons": {
     "48": "content/icons/favicon@0.5x.png",

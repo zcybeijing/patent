@@ -1,3 +1,5 @@
+import { downloadPdfViaCdp as cdpDownloadPdf } from './cnipaClient';
+
 export interface PatentMetadata {
     title?: string;
     pubNumber?: string;
@@ -11,6 +13,7 @@ export interface PatentMetadata {
     country?: string;
     issuingAuthority?: string;
     patentType?: 'invention' | 'utility' | 'design' | 'unknown';
+    extra?: string;
 }
 
 export async function getAttachments(item: any): Promise<any[]> {
@@ -373,12 +376,127 @@ export function parsePatentInfoFromText(text: string): PatentMetadata {
     return result;
 }
 
-export async function downloadPdfAndAttach(item: any, pdfUrl: string): Promise<boolean> {
+async function downloadPdfFile(filedlUrl: string, savePath: string, showpdfUrl?: string): Promise<boolean> {
+    // Try 1: Zotero.HTTP.request (no Chrome cookies, may fail)
     try {
-        const filename = pdfUrl.split('/').pop() || 'patent.pdf';
-        const tempFile = await ztoolkit.file.saveTempFile(pdfUrl, filename);
-        if (!tempFile) throw new Error('Failed to download PDF');
-        await Zotero.Attachments.importFromFile({ file: tempFile, parentItemID: item.id });
+        const resp = await Zotero.HTTP.request('GET', filedlUrl, {
+            responseType: 'arraybuffer',
+            headers: {
+                Referer: 'http://epub.cnipa.gov.cn/',
+            },
+        });
+        if (!resp || !resp.response) throw new Error('Empty response');
+        const data = new Uint8Array(resp.response);
+        const file = Cc['@mozilla.org/file/local;1'].createInstance(Ci.nsIFile);
+        file.initWithPath(savePath);
+        const stream = Cc['@mozilla.org/network/file-output-stream;1'].createInstance(Ci.nsIFileOutputStream);
+        stream.init(file, 0x02 | 0x08 | 0x20, 0o666, 0);
+        const bos = Cc['@mozilla.org/binaryoutputstream;1'].createInstance(Ci.nsIBinaryOutputStream);
+        bos.setOutputStream(stream);
+        const bytes: number[] = [];
+        for (let i = 0; i < data.length; i++) bytes.push(data[i]);
+        bos.writeByteArray(bytes, bytes.length);
+        bos.close();
+        stream.close();
+        Zotero.debug('[Patent] Downloaded PDF to: ' + savePath + ' (' + data.length + ' bytes)');
+        return true;
+    } catch (e) {
+        Zotero.debug('[Patent] downloadPdfFile HTTP 方式失败: ' + e + '，尝试 CDP 下载');
+    }
+    // Try 2: CDP-based download (has Chrome cookies, needs showpdf URL to extract real download link)
+    try {
+        const cdpUrl = showpdfUrl || filedlUrl;
+        var cdpResult = await cdpDownloadPdf(cdpUrl, savePath);
+        if (cdpResult === null) return false;
+        return true;
+    } catch (e) {
+        Zotero.debug('[Patent] downloadPdfFile CDP 方式失败: ' + e);
+        return false;
+    }
+}
+
+async function findExistingPdfAttachment(item: any): Promise<any | null> {
+    try {
+        const attachments = await getAttachments(item);
+        for (const att of attachments) {
+            try {
+                let filename = '';
+                let contentType = '';
+                if (typeof att.getFilename === 'function') filename = await att.getFilename();
+                else if (typeof att.getField === 'function') {
+                    try {
+                        filename = att.getField('filename') || '';
+                    } catch {}
+                }
+                if (!filename && att.attachmentFilename) filename = att.attachmentFilename;
+                if (att.attachmentContentType) contentType = att.attachmentContentType;
+                else if (typeof att.getField === 'function') {
+                    try {
+                        contentType = att.getField('contentType') || '';
+                    } catch {}
+                }
+                if (contentType === 'application/pdf' || filename?.toLowerCase().endsWith('.pdf')) {
+                    return att;
+                }
+            } catch (e) {
+                Zotero.debug('[Patent] Error checking attachment: ' + e);
+            }
+        }
+        return null;
+    } catch (e) {
+        Zotero.debug('[Patent] findExistingPdfAttachment error: ' + e);
+        return null;
+    }
+}
+
+async function removeAttachment(attachmentItem: any): Promise<void> {
+    try {
+        await Zotero.Items.remove(attachmentItem.id);
+        Zotero.debug('[Patent] Removed existing attachment: ' + attachmentItem.id);
+    } catch (e) {
+        Zotero.debug('[Patent] removeAttachment error: ' + e);
+    }
+}
+
+function convertShowpdfToFiledl(url: string): string {
+    if (url.indexOf('/showpdf') < 0) return url;
+    const idx = url.indexOf('path=');
+    if (idx < 0) return url;
+    const path = url.substring(idx + 5);
+    const ampIdx = path.indexOf('&');
+    const pathValue = ampIdx >= 0 ? path.substring(0, ampIdx) : path;
+    return 'http://egaz.cnipa.gov.cn/filedl?path=' + pathValue;
+}
+
+export async function downloadPdfAndAttach(item: any, pdfUrl: string, filename?: string): Promise<boolean> {
+    try {
+        const downloadUrl = convertShowpdfToFiledl(pdfUrl);
+        Zotero.debug('[Patent] Download URL: ' + downloadUrl);
+        if (!filename) {
+            const title = item.getField ? item.getField('title') : item.title;
+            const safeTitle = (title || 'patent')
+                .replace(/[/\\?%*:|"<>]/g, '')
+                .replace(/\s+/g, '_')
+                .substring(0, 100);
+            filename = safeTitle + '.pdf';
+        }
+        if (!filename.endsWith('.pdf')) {
+            filename += '.pdf';
+        }
+        const tmpDir = Cc['@mozilla.org/file/directory_service;1'].getService(Ci.nsIProperties).get('TmpD', Ci.nsIFile);
+        tmpDir.append('zoteropatent');
+        if (!tmpDir.exists()) tmpDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o777);
+        const tmpFile = tmpDir.clone();
+        tmpFile.append(filename);
+        const savePath = tmpFile.path;
+        const downloaded = await downloadPdfFile(downloadUrl, savePath, pdfUrl);
+        if (!downloaded) throw new Error('Failed to download PDF');
+        const existing = await findExistingPdfAttachment(item);
+        if (existing) {
+            await removeAttachment(existing);
+        }
+        await Zotero.Attachments.importFromFile({ file: savePath, parentItemID: item.id });
+        Zotero.debug('[Patent] PDF attached to item: ' + item.id);
         return true;
     } catch (e) {
         Zotero.debug('[Patent] downloadPdfAndAttach error: ' + e);
