@@ -377,33 +377,7 @@ export function parsePatentInfoFromText(text: string): PatentMetadata {
 }
 
 async function downloadPdfFile(filedlUrl: string, savePath: string, showpdfUrl?: string): Promise<boolean> {
-    // Try 1: Zotero.HTTP.request (no Chrome cookies, may fail)
-    try {
-        const resp = await Zotero.HTTP.request('GET', filedlUrl, {
-            responseType: 'arraybuffer',
-            headers: {
-                Referer: 'http://epub.cnipa.gov.cn/',
-            },
-        });
-        if (!resp || !resp.response) throw new Error('Empty response');
-        const data = new Uint8Array(resp.response);
-        const file = Cc['@mozilla.org/file/local;1'].createInstance(Ci.nsIFile);
-        file.initWithPath(savePath);
-        const stream = Cc['@mozilla.org/network/file-output-stream;1'].createInstance(Ci.nsIFileOutputStream);
-        stream.init(file, 0x02 | 0x08 | 0x20, 0o666, 0);
-        const bos = Cc['@mozilla.org/binaryoutputstream;1'].createInstance(Ci.nsIBinaryOutputStream);
-        bos.setOutputStream(stream);
-        const bytes: number[] = [];
-        for (let i = 0; i < data.length; i++) bytes.push(data[i]);
-        bos.writeByteArray(bytes, bytes.length);
-        bos.close();
-        stream.close();
-        Zotero.debug('[Patent] Downloaded PDF to: ' + savePath + ' (' + data.length + ' bytes)');
-        return true;
-    } catch (e) {
-        Zotero.debug('[Patent] downloadPdfFile HTTP 方式失败: ' + e + '，尝试 CDP 下载');
-    }
-    // Try 2: CDP-based download (has Chrome cookies, needs showpdf URL to extract real download link)
+    // CNIPA egaz.cnipa.gov.cn 不支持 Zotero HTTP 下载（总是 502），仅使用 CDP 浏览器下载
     try {
         const cdpUrl = showpdfUrl || filedlUrl;
         var cdpResult = await cdpDownloadPdf(cdpUrl, savePath);
@@ -451,7 +425,7 @@ async function findExistingPdfAttachment(item: any): Promise<any | null> {
 
 async function removeAttachment(attachmentItem: any): Promise<void> {
     try {
-        await Zotero.Items.remove(attachmentItem.id);
+        await Zotero.Items.erase(attachmentItem.id);
         Zotero.debug('[Patent] Removed existing attachment: ' + attachmentItem.id);
     } catch (e) {
         Zotero.debug('[Patent] removeAttachment error: ' + e);

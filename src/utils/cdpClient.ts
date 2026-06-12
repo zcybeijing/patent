@@ -280,9 +280,19 @@ export async function findCnipaTabAndAttach(): Promise<boolean> {
             return true;
         }
     }
+    // 找 egaz 页面（showpdf/filedl）
+    for (var t of targets) {
+        if (t.url && t.url.indexOf('egaz.cnipa.gov.cn') >= 0) {
+            Zotero.debug('[CDP] 找到 egaz 页面: ' + t.targetId + ' url=' + t.url);
+            targetId = t.targetId;
+            var attachResult = await sendCommand('Target.attachToTarget', { targetId, flatten: true });
+            sessionId = attachResult.sessionId;
+            return true;
+        }
+    }
     // 降级：任何 CNIPA 页面
     for (var t of targets) {
-        if (t.url && t.url.indexOf('epub.cnipa.gov.cn') >= 0) {
+        if (t.url && (t.url.indexOf('epub.cnipa.gov.cn') >= 0 || t.url.indexOf('cnipa.gov.cn') >= 0)) {
             Zotero.debug('[CDP] 找到 CNIPA 页面: ' + t.targetId + ' url=' + t.url);
             targetId = t.targetId;
             var attachResult = await sendCommand('Target.attachToTarget', { targetId, flatten: true });
@@ -292,6 +302,51 @@ export async function findCnipaTabAndAttach(): Promise<boolean> {
         }
     }
     Zotero.debug('[CDP] 未找到 CNIPA 页面');
+    return false;
+}
+
+/** 查找 showpdf/filedl 标签页（egaz.cnipa.gov.cn）并附加 */
+export async function findShowpdfTabAndAttach(): Promise<boolean> {
+    var result = await sendCommand('Target.getTargets', {});
+    var targets = result.targetInfos || [];
+    for (var t of targets) {
+        if (t.type === 'page' && t.url && (t.url.indexOf('showpdf') >= 0 || t.url.indexOf('filedl') >= 0)) {
+            Zotero.debug('[CDP] 找到 showpdf/filedl 页面: ' + t.targetId + ' url=' + t.url);
+            targetId = t.targetId;
+            var attachResult = await sendCommand('Target.attachToTarget', { targetId, flatten: true });
+            sessionId = attachResult.sessionId;
+            Zotero.debug('[CDP] 已附加到 showpdf/filedl 页面, session: ' + sessionId);
+            return true;
+        }
+    }
+    return false;
+}
+
+/** 查找 egaz.cnipa.gov.cn 标签页（验证码页面）并附加，优先 showpdf/filedl 其次任何 egaz 页面 */
+export async function findEgazTabAndAttach(): Promise<boolean> {
+    var result = await sendCommand('Target.getTargets', {});
+    var targets = result.targetInfos || [];
+    // 优先 showpdf/filedl
+    for (var t of targets) {
+        if (t.type === 'page' && t.url && (t.url.indexOf('showpdf') >= 0 || t.url.indexOf('filedl') >= 0)) {
+            Zotero.debug('[CDP] 找到 egaz showpdf/filedl: ' + t.targetId + ' url=' + t.url);
+            targetId = t.targetId;
+            var attachResult = await sendCommand('Target.attachToTarget', { targetId, flatten: true });
+            sessionId = attachResult.sessionId;
+            return true;
+        }
+    }
+    // 其次任何 egaz.cnipa.gov.cn 页面
+    for (var t of targets) {
+        if (t.type === 'page' && t.url && t.url.indexOf('egaz.cnipa.gov.cn') >= 0) {
+            Zotero.debug('[CDP] 找到 egaz 页面: ' + t.targetId + ' url=' + t.url);
+            targetId = t.targetId;
+            var attachResult = await sendCommand('Target.attachToTarget', { targetId, flatten: true });
+            sessionId = attachResult.sessionId;
+            Zotero.debug('[CDP] 已附加到 egaz 页面, session: ' + sessionId);
+            return true;
+        }
+    }
     return false;
 }
 
@@ -388,11 +443,18 @@ export async function clickElementReal(selector: string): Promise<boolean> {
 }
 
 /** 获取第 N 个匹配元素的坐标（通过 querySelectorAll） */
-async function getElementRectByIndex(selector: string, index: number): Promise<{ x: number; y: number; w: number; h: number } | null> {
+async function getElementRectByIndex(
+    selector: string,
+    index: number,
+): Promise<{ x: number; y: number; w: number; h: number } | null> {
     var result = await evaluateJS(
         '(function(){var e=document.querySelectorAll("' +
             selector.replace(/"/g, '\\"') +
-            '");if(!e||!e[' + index + '])return null;var r=e[' + index + '].getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height}})()',
+            '");if(!e||!e[' +
+            index +
+            '])return null;var r=e[' +
+            index +
+            '].getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height}})()',
     );
     return result;
 }
@@ -456,6 +518,20 @@ export async function waitForElement(selector: string, timeoutMs: number = 15000
     return false;
 }
 
+/** 关闭当前标签页 */
+export async function closeCurrentTab(): Promise<void> {
+    if (targetId) {
+        try {
+            await sendCommand('Target.closeTarget', { targetId });
+            targetId = '';
+            sessionId = '';
+            Zotero.debug('[CDP] 已关闭当前标签页');
+        } catch (e) {
+            Zotero.debug('[CDP] 关闭标签页失败: ' + e);
+        }
+    }
+}
+
 /** 关闭浏览器 */
 export async function closeBrowser(): Promise<void> {
     if (ws) {
@@ -469,6 +545,11 @@ export async function closeBrowser(): Promise<void> {
         req.open('GET', 'http://127.0.0.1:' + CDP_PORT + '/json/close/' + targetId, false);
         req.send(null);
     } catch (_) {}
+}
+
+/** CDP 是否已连接（浏览器未关闭） */
+export function isConnected(): boolean {
+    return ws !== null && ws.readyState === 1;
 }
 
 /** 断开 CDP 连接 */

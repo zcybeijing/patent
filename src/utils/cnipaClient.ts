@@ -505,17 +505,32 @@ export async function openCnipaBrowser(searchTitle) {
 
         // ---- 在首页搜索框中填入专利标题，确认值已设置 ----
         Zotero.debug('[Patent] 在首页搜索框输入: ' + searchTitle);
-        var inputOk = await cdp.evaluateJS(
-            '(function(){var e=document.getElementById("searchStr");if(!e)return "NO_INPUT";' +
-                'e.value=' +
-                JSON.stringify(searchTitle) +
-                ';' +
-                'e.dispatchEvent(new Event("input",{bubbles:true}));' +
-                'e.dispatchEvent(new Event("change",{bubbles:true}));' +
-                'e.dispatchEvent(new KeyboardEvent("keyup",{bubbles:true,key:"Enter"}));' +
-                'return "OK value="+e.value;})()',
-        );
-        Zotero.debug('[Patent] 输入结果: ' + inputOk);
+        var inputOk = '';
+        for (var inRetry = 0; inRetry < 20; inRetry++) {
+            if (!cdp.isConnected()) {
+                Zotero.debug('[Patent] 浏览器已关闭');
+                throw new Error('BROWSER_CLOSED');
+            }
+            inputOk = await cdp.evaluateJS(
+                '(function(){var e=document.getElementById("searchStr");if(!e)return "NO_INPUT";' +
+                    'e.value=' +
+                    JSON.stringify(searchTitle) +
+                    ';' +
+                    'e.dispatchEvent(new Event("input",{bubbles:true}));' +
+                    'e.dispatchEvent(new Event("change",{bubbles:true}));' +
+                    'e.dispatchEvent(new KeyboardEvent("keyup",{bubbles:true,key:"Enter"}));' +
+                    'return "OK value="+e.value;})()',
+            );
+            Zotero.debug('[Patent] 输入结果: ' + inputOk);
+            if (inputOk && inputOk.indexOf('NO_INPUT') < 0) break;
+            Zotero.debug('[Patent] 搜索框未就绪，等待重试...');
+            await sleep(1000);
+        }
+        if (!inputOk || inputOk.indexOf('NO_INPUT') >= 0) {
+            Zotero.debug('[Patent] 搜索框未找到，无法搜索');
+            showNotification('CNIPA 首页未正常加载');
+            return true;
+        }
 
         // ---- 自然表单提交，让浏览器导航到 /Dxb/IndexQuery ----
         Zotero.debug('[Patent] 提交首页搜索（自然导航）...');
@@ -577,7 +592,7 @@ export async function openCnipaBrowser(searchTitle) {
         }
         Zotero.debug('[Patent] 匹配结果: an=' + match.an + ', idx=' + matchIdx);
 
-        // ---- 步骤4: 在页面内通过同步 XHR POST 获取 SwDetail HTML，提取 PDF URL ----
+        // ---- 步骤4: 在页面内通过 fetch POST 获取 SwDetail HTML，提取 PDF URL ----
         // 不打开新标签页（避免弹窗拦截），不消耗 zl_xm 一次性状态
         var pdfUrl = null;
         Zotero.debug('[Patent] 通过同步 XHR 获取 SwDetail 内容...');
@@ -592,18 +607,16 @@ export async function openCnipaBrowser(searchTitle) {
             '(function(){' +
                 'return new Promise(function(r){' +
                 spExpr +
-                'var x=new XMLHttpRequest();' +
-                'x.open("POST","/Sw/SwDetail",true);' +
-                'x.timeout=25000;' +
-                'x.setRequestHeader("Content-Type","application/x-www-form-urlencoded");' +
-                'x.setRequestHeader("Referer",location.href);' +
-                'x.onload=function(){var h=x.responseText||"";' +
+                'var url="/Sw/SwDetail";' +
+                'var body=sp.toString();' +
+                'fetch(url,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded","Referer":location.href},body:body,credentials:"include"})' +
+                '.then(function(fr){return fr.text();})' +
+                '.then(function(h){' +
                 'var fm=h.match(/https?:\\/\\/egaz\\.cnipa\\.gov\\.cn\\/(showpdf|filedl)[^"\'\\s]*/);' +
-                'if(fm)r(JSON.stringify({pdfUrl:fm[0],htmlLen:h.length,status:x.status}));' +
-                'else r(JSON.stringify({pdfUrl:"",htmlLen:h.length,status:x.status,sample:h.substring(0,2000)}));};' +
-                'x.ontimeout=function(){r(JSON.stringify({error:"timeout"}));};' +
-                'x.onerror=function(){r(JSON.stringify({error:"xhr_error",status:x.status}));};' +
-                'x.send(sp.toString());' +
+                'if(fm)r(JSON.stringify({pdfUrl:fm[0],htmlLen:h.length}));' +
+                'else r(JSON.stringify({pdfUrl:"",htmlLen:h.length,sample:h.substring(0,2000)}));' +
+                '})' +
+                '.catch(function(e){r(JSON.stringify({error:e.message}));});' +
                 '});' +
             '})()',
             true,
@@ -642,65 +655,101 @@ export async function openCnipaBrowser(searchTitle) {
                     } catch (_) {}
                 }
             if (curUrl && curUrl.indexOf('SwDetail') >= 0) {
-                    // 步骤1: 在 SwDetail 页面上，先点击"下载PDF"按钮
-                    var dlClicked = await cdp.evaluateJS(
-                        '(function(){' +
-                        'var btns=document.querySelectorAll("button,a,input[type=button]");' +
-                        'for(var i=0;i<btns.length;i++){' +
-                        'var bt=(btns[i].textContent||btns[i].value||"").toLowerCase();' +
-                        'if(bt.indexOf("\u4e0b\u8f7d")>=0||bt.indexOf("pdf")>=0){' +
-                        'btns[i].click();return true;}}return false;})()',
+                    // 诊断：查看 SwDetail 页面状态
+                    try {
+                        var diag = await cdp.evaluateJS(
+                            'JSON.stringify({url:location.href,title:document.title,hLen:(document.body?document.body.innerHTML.length:0),dLen:(document.documentElement?document.documentElement.outerHTML.length:0)})',
+                        );
+                        Zotero.debug('[Patent] SwDetail 诊断: ' + diag);
+                    } catch (e) {
+                        Zotero.debug('[Patent] SwDetail 诊断失败: ' + e);
+                    }
+                    // Hook jQuery AJAX 事件：捕获验证码响应 和 CheckVcode 结果
+                    try {
+                        await cdp.evaluateJS(
+                            'window.__capDiag={};' +
+                            'window.__filedlUrl="";' +
+                            '$(document).ajaxSuccess(function(e,xhr,settings){' +
+                            'var url=settings.url||"";' +
+                            'if(url.indexOf("egaz.cnipa.gov.cn/Captcha")>=0){' +
+                            'window.__capDiag={stage:"success",text:(xhr.responseText||"").substring(0,500)};}' +
+                            'if(url.indexOf("/CheckVcode")>=0||url.indexOf("CheckVcode")>=0){' +
+                            'try{var d=JSON.parse(xhr.responseText);' +
+                            'if(d&&d.refer){window.__filedlUrl=d.refer;}}catch(_){}}' +
+                            '});',
+                        );
+                    } catch (_) {}
+                    // 用真实鼠标点击"下载PDF"按钮，触发挑战框
+                    var dlBtnSet = await cdp.evaluateJS(
+                        '(function(){var btns=document.querySelectorAll("button,a,input[type=button]");' +
+                            'for(var i=0;i<btns.length;i++){' +
+                            'var bt=(btns[i].textContent||btns[i].value||"").toLowerCase();' +
+                            'if(bt.indexOf("\u4e0b\u8f7d")>=0||bt.indexOf("pdf")>=0){' +
+                            'btns[i].id="_patent_dl_btn";return true;}}return false;})()',
                     );
-                    if (dlClicked) {
-                        Zotero.debug('[Patent] 已点击下载PDF按钮');
-                        // 步骤2: 等待验证码或 showpdf/filedl 新标签页
-                        for (var dlW = 0; dlW < 15; dlW++) {
-                            await sleep(1000);
-                            // 检查当前页是否出现验证码
-                            var dlChk = await cdp.evaluateJS(
-                                '(function(){var txt=document.body?document.body.textContent||"":"";' +
-                                'var mt=txt.match(/(\d+)\s*([+\-])\s*(\d+)\s*=/);' +
-                                'if(mt)return JSON.stringify({captcha:true,a:parseInt(mt[1],10),op:mt[2],b:parseInt(mt[3],10)});' +
-                                'var h=document.documentElement.outerHTML||"";' +
-                                'var fm=h.match(/https?:\\/\\/egaz\\.cnipa\\.gov\\.cn\\/(filedl|showpdf)[^"\'\\s]*/);' +
-                                'if(fm)return JSON.stringify({pdfUrl:fm[0]});' +
-                                'return JSON.stringify({});})()',
-                            );
-                            if (dlChk) {
-                                var dlData = JSON.parse(dlChk);
-                                if (dlData.captcha) {
-                                    var ans = dlData.op === '+' ? dlData.a + dlData.b : dlData.a - dlData.b;
-                                    Zotero.debug('[Patent] 验证码: ' + dlData.a+dlData.op+dlData.b+'='+ans);
-                                    await cdp.evaluateJS(
-                                        '(function(){var ai=document.querySelector("input[type=text],input:not([type])");' +
-                                        'if(ai){ai.value='+ans+';' +
-                                        'var oks=document.querySelectorAll("button,a,input[type=button]");' +
-                                        'for(var oi=0;oi<oks.length;oi++){' +
-                                        'if((oks[oi].textContent||oks[oi].value||"").indexOf("\u786e\u5b9a")>=0){oks[oi].click();return;}}}})()',
-                                    );
-                                    continue;
+                    if (dlBtnSet) await cdp.clickElementReal('#_patent_dl_btn');
+                    await sleep(2000);
+                    try {
+                        var diag2 = await cdp.evaluateJS(
+                            'JSON.stringify({url:location.href,vcodeStrExists:!!document.getElementById("vcodeStr"),tipsDivExists:!!document.getElementById("tipsDiv"),title:document.title,bodyLen:(document.body?document.body.innerHTML.length:0)})',
+                        );
+                        Zotero.debug('[Patent] 点击下载后诊断: ' + diag2);
+                    } catch (_) {}
+                    Zotero.debug('[Patent] 已点击下载PDF按钮，请在浏览器中手动输入验证码');
+                    showNotification('请在浏览器中手动输入验证码并点击确定，等待PDF下载');
+                    // 等待最多 180 秒：验证码解决后系统自动下载 PDF
+                    for (var dw2 = 0; dw2 < 180; dw2++) {
+                        if (!cdp.isConnected()) {
+                            Zotero.debug('[Patent] 浏览器已关闭');
+                            throw new Error('BROWSER_CLOSED');
+                        }
+                        await sleep(1000);
+                        try {
+                            // 1. AJAX hook 捕获到 CheckVcode 返回的 filedl URL
+                            var filedlFromAjax = await cdp.evaluateJS('window.__filedlUrl||""');
+                            if (filedlFromAjax) {
+                                Zotero.debug('[Patent] 通过 AJAX 捕获到 filedl URL: ' + filedlFromAjax);
+                                pdfUrl = filedlFromAjax;
+                                if (pdfUrl.indexOf('http') < 0) {
+                                    if (pdfUrl.startsWith('/')) pdfUrl = 'http://egaz.cnipa.gov.cn' + pdfUrl;
+                                    else pdfUrl = 'http://egaz.cnipa.gov.cn/' + pdfUrl;
                                 }
-                                if (dlData.pdfUrl) { pdfUrl = dlData.pdfUrl; break; }
+                                break;
                             }
-                            // 检查新标签页
-                            var dlSw = await cdp.findCnipaTabAndAttach();
+                            // 2. 检查 filedl 新标签页
+                            var dlSw = await cdp.findShowpdfTabAndAttach();
                             if (dlSw) {
                                 var dlNu = await cdp.evaluateJS('window.location.href');
-                                if (dlNu.indexOf('showpdf') >= 0 || dlNu.indexOf('filedl') >= 0) {
-                                    pdfUrl = dlNu; break;
+                                if (dlNu && dlNu.indexOf('filedl') >= 0) {
+                                    pdfUrl = dlNu;
+                                    Zotero.debug('[Patent] 新标签页 filedl URL: ' + pdfUrl);
+                                    break;
                                 }
                             }
-                        }
-                        if (pdfUrl) { Zotero.debug('[Patent] 下载按钮后获取到 URL: ' + pdfUrl); break; }
+                            // 3. 检查当前页面是否有 filedl URL
+                            var hHtml = await cdp.evaluateJS('(document.documentElement.outerHTML||"")');
+                            if (hHtml && hHtml.indexOf('filedl') >= 0) {
+                                var egazFm = hHtml.match(/filedl\?path=[^'"\s]+/);
+                                if (egazFm) {
+                                    pdfUrl = 'http://egaz.cnipa.gov.cn/' + egazFm[0];
+                                    Zotero.debug('[Patent] 当前页面发现 filedl URL: ' + pdfUrl);
+                                    break;
+                                }
+                            }
+                            // 4. 检查当前 URL 跳转到了 filedl
+                            var curUrl2 = await cdp.evaluateJS('window.location.href');
+                            if (curUrl2 && curUrl2.indexOf('filedl') >= 0) {
+                                pdfUrl = curUrl2;
+                                Zotero.debug('[Patent] 页面跳转到 filedl: ' + pdfUrl);
+                                break;
+                            }
+                        } catch (_) {}
                     }
-                    // 步骤3: 兜底——如果 SwDetail 页面上有 showpdf URL，用它
-                    if (!pdfUrl) {
-                        var showpdfUrl = await cdp.evaluateJS(
-                            '(function(){var h=document.documentElement.outerHTML||"";' +
-                            'var fm=h.match(/https?:\\/\\/egaz\\.cnipa\\.gov\\.cn\\/(showpdf|filedl)[^"\'\\s]*/);' +
-                            'if(fm)return fm[0];return "";})()',
-                        );
-                        if (showpdfUrl) { pdfUrl = showpdfUrl; break; }
+                    if (pdfUrl) {
+                        Zotero.debug('[Patent] 获取到 filedl URL: ' + pdfUrl);
+                        break;
+                    } else {
+                        Zotero.debug('[Patent] 等待验证码超时，未捕获到 filedl URL');
                     }
                 }
             }

@@ -8,7 +8,7 @@ import {
     downloadPdfViaCdp,
     PatentSearchResult,
 } from '../utils/cnipaClient';
-import { downloadPdfAndAttach, getAttachments, extractPatentInfoFromPdf, PatentMetadata } from '../utils/pdfHelpers';
+import { getAttachments, extractPatentInfoFromPdf, PatentMetadata } from '../utils/pdfHelpers';
 
 let menuElements: Element[] = [];
 
@@ -74,9 +74,14 @@ export function registerMenu() {
             const pdfUrl = await cnipaGetPdfUrlViaCdp(title);
             if (pdfUrl) {
                 // 用 CDP 浏览器下载（有 CNIPA 会话，避免 502）
-                const safeTitle = (title || 'patent').replace(/[/\\?%*:|"<>]/g, '').replace(/\s+/g, '_').substring(0, 100);
+                const safeTitle = (title || 'patent')
+                    .replace(/[/\\?%*:|"<>]/g, '')
+                    .replace(/\s+/g, '_')
+                    .substring(0, 100);
                 const filename = safeTitle + '.pdf';
-                const tmpDir = Cc['@mozilla.org/file/directory_service;1'].getService(Ci.nsIProperties).get('TmpD', Ci.nsIFile);
+                const tmpDir = Cc['@mozilla.org/file/directory_service;1']
+                    .getService(Ci.nsIProperties)
+                    .get('TmpD', Ci.nsIFile);
                 tmpDir.append('zoteropatent');
                 if (!tmpDir.exists()) tmpDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o777);
                 const tmpFile = tmpDir.clone();
@@ -89,19 +94,19 @@ export function registerMenu() {
                     for (const old of oldAttachments) {
                         let ct = '';
                         if (old.attachmentContentType) ct = old.attachmentContentType;
-                        else if (typeof old.getField === 'function') try { ct = old.getField('contentType') || ''; } catch {}
+                        else if (typeof old.getField === 'function')
+                            try {
+                                ct = old.getField('contentType') || '';
+                            } catch {}
                         if (ct === 'application/pdf') {
                             Zotero.debug('[Patent] 移除旧附件: ' + old.id);
-                            await Zotero.Items.remove(old.id);
+                            await Zotero.Items.erase(old.id);
                         }
                     }
                     await Zotero.Attachments.importFromFile({ file: savePath, parentItemID: item.id });
                     showNotification('PDF 已下载并附加到条目');
                 } else {
-                    // 降级：Zotero HTTP 下载
-                    showNotification('CDP 下载失败，尝试 HTTP 下载...');
-                    const ok = await downloadPdfAndAttach(item, pdfUrl);
-                    showNotification(ok ? 'PDF 已下载并附加到条目' : '下载专利文件失败');
+                    showNotification('CDP 下载未能完成，请手动处理');
                 }
             } else {
                 showNotification('未能获取 PDF 下载地址');
@@ -456,38 +461,41 @@ async function handleBatchDownload(items: any[]) {
             }
 
             if (pdfUrl) {
-                const safeTitle = (title || 'patent').replace(/[/\\?%*:|"<>]/g, '').replace(/\s+/g, '_').substring(0, 100);
+                const safeTitle = (title || 'patent')
+                    .replace(/[/\\?%*:|"<>]/g, '')
+                    .replace(/\s+/g, '_')
+                    .substring(0, 100);
                 const filename = safeTitle + '.pdf';
-                const tmpDir = Cc['@mozilla.org/file/directory_service;1'].getService(Ci.nsIProperties).get('TmpD', Ci.nsIFile);
+                const tmpDir = Cc['@mozilla.org/file/directory_service;1']
+                    .getService(Ci.nsIProperties)
+                    .get('TmpD', Ci.nsIFile);
                 tmpDir.append('zoteropatent');
                 if (!tmpDir.exists()) tmpDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o777);
                 const tmpFile = tmpDir.clone();
                 tmpFile.append(filename);
                 const savePath = tmpFile.path;
                 const downloaded = await downloadPdfViaCdp(pdfUrl, savePath);
-                let ok = false;
                 if (downloaded) {
                     const oldAttachments = await getAttachments(item);
                     for (const old of oldAttachments) {
                         let ct = '';
                         if (old.attachmentContentType) ct = old.attachmentContentType;
-                        else if (typeof old.getField === 'function') try { ct = old.getField('contentType') || ''; } catch {}
+                        else if (typeof old.getField === 'function')
+                            try {
+                                ct = old.getField('contentType') || '';
+                            } catch {}
                         if (ct === 'application/pdf') {
                             Zotero.debug('[Patent] 移除旧附件: ' + old.id);
-                            await Zotero.Items.remove(old.id);
+                            await Zotero.Items.erase(old.id);
                         }
                     }
                     await Zotero.Attachments.importFromFile({ file: savePath, parentItemID: item.id });
-                    ok = true;
-                } else {
-                    ok = await downloadPdfAndAttach(item, pdfUrl);
-                }
-                if (ok) {
                     successCount++;
                     Zotero.debug('[Patent] Successfully downloaded PDF for: ' + title);
                 } else {
                     failCount++;
                     failedItems.push(title || 'Unknown');
+                    Zotero.debug('[Patent] CDP 下载失败: ' + title);
                 }
             } else {
                 failCount++;
