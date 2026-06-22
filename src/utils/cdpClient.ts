@@ -183,8 +183,8 @@ function sendRaw(method: string, params: any, useSession: boolean): Promise<any>
 }
 
 export async function sendCommand(method: string, params: any = {}): Promise<any> {
-    // Target.* methods are browser-level (no session); everything else needs session
-    var isBrowserMethod = method.startsWith('Target.');
+    // Target.* / Browser.* are browser-level (no session); everything else needs session
+    var isBrowserMethod = method.startsWith('Target.') || method.startsWith('Browser.');
     return sendRaw(method, params, !isBrowserMethod);
 }
 
@@ -550,7 +550,26 @@ export async function closeCurrentTab(): Promise<void> {
     }
 }
 
-/** 关闭浏览器 */
+/** 完全退出浏览器并清理连接 */
+export async function quitBrowser(): Promise<void> {
+    Zotero.debug('[CDP] 退出浏览器...');
+    if (ws && ws.readyState === 1) {
+        try {
+            await sendRaw('Browser.close', {}, false);
+        } catch (_) {
+            Zotero.debug('[CDP] Browser.close 命令失败（浏览器可能已关闭）');
+        }
+    }
+    if (ws) {
+        try { ws.close(); } catch (_) {}
+        ws = null;
+    }
+    targetId = '';
+    sessionId = '';
+    Zotero.debug('[CDP] 浏览器已退出');
+}
+
+/** 关闭浏览器（仅关闭 WS + 标签页，保留浏览器进程） */
 export async function closeBrowser(): Promise<void> {
     if (ws) {
         try {
@@ -563,6 +582,8 @@ export async function closeBrowser(): Promise<void> {
         req.open('GET', 'http://127.0.0.1:' + CDP_PORT + '/json/close/' + targetId, false);
         req.send(null);
     } catch (_) {}
+    targetId = '';
+    sessionId = '';
 }
 
 /** CDP 是否已连接（浏览器未关闭） */

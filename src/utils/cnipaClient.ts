@@ -19,10 +19,8 @@ const OCR_HELPER_TEMPLATE = [
     'try{',
     'var T=require(p.join(nmPath,"tesseract.js"));',
     'const buf=fs.readFileSync(imgPath);',
-    'const r=await T.recognize(buf,"eng");',
-    'var txt=r&&r.data&&r.data.text?r.data.text:"";',
-    'txt=txt.replace(/[^0-9+\\-=]/g," ").trim();',
-    'fs.writeFileSync(readyPath,JSON.stringify({text:txt}));',
+    'const r=await T.recognize(buf,"eng",{logger:function(){}});',
+    'fs.writeFileSync(readyPath,JSON.stringify({text:r&&r.data&&r.data.text?r.data.text:""}));',
     '}catch(e){fs.writeFileSync(readyPath,JSON.stringify({error:e.message}));}',
     'try{fs.unlinkSync(imgPath)}catch(e){}',
     '})()',
@@ -538,6 +536,7 @@ export async function openCnipaBrowser(searchTitle) {
         return true;
     }
     _running = true;
+    var _keepBrowser = false;
 
     try {
         Zotero.debug('[Patent] 启动浏览器 CDP 自动化...');
@@ -595,6 +594,7 @@ export async function openCnipaBrowser(searchTitle) {
 
         if (!searchTitle) {
             showNotification('浏览器已打开');
+            _keepBrowser = true;
             return true;
         }
 
@@ -992,16 +992,6 @@ export async function openCnipaBrowser(searchTitle) {
                                 var imageFile = tmpDir.path + '\\cap_' + ts + '.jpg';
                                 var readyFile = tmpDir.path + '\\ready_' + ts + '.json';
                                 var helperFile = tmpDir.path + '\\ocr_' + ts + '.cjs';
-                                try {
-                                    var processedYzm = await cdp.evaluateJS(
-                                        '(function(){return new Promise(function(r){var img=new Image();img.onload=function(){var c=document.createElement("canvas");var s=4;c.width=img.width*s;c.height=img.height*s;var x=c.getContext("2d");x.drawImage(img,0,0,c.width,c.height);r(c.toDataURL("image/png"));};img.src=document.getElementById("yzm").src;})})()',
-                                        true,
-                                    );
-                                    if (processedYzm && processedYzm.indexOf('base64,') >= 0) {
-                                        yzmSrc = processedYzm;
-                                        Zotero.debug('[Patent] 验证码图片已预处理（4x放大）');
-                                    }
-                                } catch (_) {}
                                 var yzmB64 = yzmSrc.split(',')[1] || yzmSrc;
                                 if (yzmB64) {
                                     decodeBase64ToFile(imageFile, yzmB64);
@@ -1012,7 +1002,7 @@ export async function openCnipaBrowser(searchTitle) {
                                     proc.init(nodeFile);
                                     proc.runwAsync([helperFile, imageFile, readyFile, nmPath], 4);
                                     Zotero.debug('[Patent] OCR 辅助进程已启动，等待结果...');
-                                    for (var pw = 0; pw < 120; pw++) {
+                                    for (var pw = 0; pw < 30; pw++) {
                                         await sleep(1000);
                                         var raw = cdp.readTextFile(readyFile);
                                         if (raw) {
@@ -1173,12 +1163,16 @@ export async function openCnipaBrowser(searchTitle) {
         }
 
         Zotero.debug('[Patent] === END ===');
-        _running = false;
+        _keepBrowser = !!pdfUrl;
         return pdfUrl || true;
     } catch (e) {
         Zotero.debug('[Patent] CDP 自动化异常: ' + e);
-        _running = false;
         return true;
+    } finally {
+        _running = false;
+        if (!_keepBrowser) {
+            try { await cdp.quitBrowser(); } catch (_) {}
+        }
     }
 }
 
