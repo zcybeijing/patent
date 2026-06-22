@@ -14,7 +14,7 @@ let targetId = '';
 let sessionId = '';
 
 /** 查找 Node.js */
-function findNodePath(): string | null {
+export function findNodePath(): string | null {
     var env = Cc['@mozilla.org/process/environment;1'].getService(Ci.nsIEnvironment);
     var local = Cc['@mozilla.org/file/local;1'].createInstance(Ci.nsIFile);
     for (var d of (env.get('PATH') || '').split(';')) {
@@ -38,7 +38,7 @@ function findNodePath(): string | null {
 }
 
 /** 写文件（nsIFile 写入 UTF-8） */
-function writeTextFile(path: string, content: string) {
+export function writeTextFile(path: string, content: string) {
     var file = Cc['@mozilla.org/file/local;1'].createInstance(Ci.nsIFile);
     file.initWithPath(path);
     var stream = Cc['@mozilla.org/network/file-output-stream;1'].createInstance(Ci.nsIFileOutputStream);
@@ -117,7 +117,7 @@ export async function launchBrowser(): Promise<boolean> {
 }
 
 /** 读文件（nsIFile） */
-function readTextFile(path: string): string | null {
+export function readTextFile(path: string): string | null {
     try {
         var file = Cc['@mozilla.org/file/local;1'].createInstance(Ci.nsIFile);
         file.initWithPath(path);
@@ -302,6 +302,24 @@ export async function findCnipaTabAndAttach(): Promise<boolean> {
         }
     }
     Zotero.debug('[CDP] 未找到 CNIPA 页面');
+    return false;
+}
+
+/** 查找 CNIPA 查询结果页 Dxb/IndexQuery 并附加 */
+export async function findCnipaIndexQueryTabAndAttach(): Promise<boolean> {
+    var result = await sendCommand('Target.getTargets', {});
+    var targets = result.targetInfos || [];
+    for (var t of targets) {
+        if (t.url && t.url.indexOf('Dxb/IndexQuery') >= 0) {
+            Zotero.debug('[CDP] 找到 CNIPA 查询结果页: ' + t.targetId + ' url=' + t.url);
+            targetId = t.targetId;
+            var attachResult = await sendCommand('Target.attachToTarget', { targetId, flatten: true });
+            sessionId = attachResult.sessionId;
+            Zotero.debug('[CDP] 已附加到 CNIPA 查询结果页, session: ' + sessionId);
+            return true;
+        }
+    }
+    Zotero.debug('[CDP] 未找到 CNIPA 查询结果页');
     return false;
 }
 
