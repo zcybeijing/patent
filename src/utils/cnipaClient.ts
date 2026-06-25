@@ -6,7 +6,7 @@
  * - 支持按专利名称搜索和获取PDF下载链接
  */
 
-import { showNotification } from './uiHelpers';
+import { showNotification, showCaptchaDialog, showInputDialog } from './uiHelpers';
 import * as cdp from './cdpClient';
 
 var _running = false;
@@ -710,24 +710,30 @@ export async function openCnipaBrowser(searchTitle) {
             ');' +
             'sp.set("trsSql","");' +
             'sp.set("__RequestVerificationToken",(document.querySelector("input[name=\\"__RequestVerificationToken\\"]")||{}).value||"");';
-        var swRaw = await cdp.evaluateJS(
-            '(function(){' +
-                'return new Promise(function(r){' +
-                spExpr +
-                'var url="/Sw/SwDetail";' +
-                'var body=sp.toString();' +
-                'fetch(url,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded","Referer":location.href},body:body,credentials:"include"})' +
-                '.then(function(fr){return fr.text();})' +
-                '.then(function(h){' +
-                'var fm=h.match(/https?:\\/\\/egaz\\.cnipa\\.gov\\.cn\\/(showpdf|filedl)[^"\'\\s]*/);' +
-                'if(fm)r(JSON.stringify({pdfUrl:fm[0],htmlLen:h.length}));' +
-                'else r(JSON.stringify({pdfUrl:"",htmlLen:h.length,sample:h.substring(0,2000)}));' +
-                '})' +
-                '.catch(function(e){r(JSON.stringify({error:e.message}));});' +
-                '});' +
-                '})()',
-            true,
-        );
+        var swRaw = await Promise.race([
+            cdp.evaluateJS(
+                '(function(){' +
+                    'return new Promise(function(r){' +
+                    spExpr +
+                    'var url="/Sw/SwDetail";' +
+                    'var body=sp.toString();' +
+                    'var timer=setTimeout(function(){try{r(JSON.stringify({error:"timeout"}));}catch(e){}},20000);' +
+                    'fetch(url,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded","Referer":location.href},body:body,credentials:"include"})' +
+                    '.then(function(fr){clearTimeout(timer);return fr.text();})' +
+                    '.then(function(h){clearTimeout(timer);' +
+                    'var fm=h.match(/https?:\\/\\/egaz\\.cnipa\\.gov\\.cn\\/(showpdf|filedl)[^"\'\\s]*/);' +
+                    'if(fm)r(JSON.stringify({pdfUrl:fm[0],htmlLen:h.length}));' +
+                    'else r(JSON.stringify({pdfUrl:"",htmlLen:h.length,sample:h.substring(0,2000)}));' +
+                    '})' +
+                    '.catch(function(e){clearTimeout(timer);r(JSON.stringify({error:e.message}));});' +
+                    '});' +
+                    '})()',
+                true,
+            ),
+            sleep(25000).then(function () {
+                return JSON.stringify({ error: 'cdp_eval_timeout' });
+            }),
+        ]);
         if (swRaw) {
             var swData = JSON.parse(swRaw);
             Zotero.debug(
@@ -885,11 +891,11 @@ export async function openCnipaBrowser(searchTitle) {
                                 '$(document).ajaxError(function(e,xhr,settings,error){window.__capLogger.xhrError.push({url:settings.url||"",status:xhr.status,error:error||""});});',
                         );
                     } catch (_) {}
-                    // Hook openTips 函数捕获 dlPath
+                    // Hook openTips 捕获 dlPath，但不阻止原始函数执行（让页面正常显示验证码并初始化会话）
                     try {
                         await cdp.evaluateJS(
                             '(function(){if(typeof openTips==="function" && !window.__capOpenTipsPatched){' +
-                                'var oldOpenTips=openTips; window.openTips=function(dlPath){window.__capDlPath=dlPath; return oldOpenTips.apply(this, arguments);};' +
+                                'var oldOpenTips=openTips; window.openTips=function(dlPath){window.__capDlPath=dlPath; return oldOpenTips.apply(this,arguments);};' +
                                 'window.__capOpenTipsPatched=true;} })()',
                         );
                     } catch (_) {}
@@ -941,17 +947,17 @@ export async function openCnipaBrowser(searchTitle) {
                             'btns[i].id="_patent_dl_btn";return true;}}return false;})()',
                     );
                     if (dlBtnSet) {
-                        try {
-                            await cdp.evaluateJS('if(window.__capDlPath&&typeof openTips==="function"){openTips(window.__capDlPath);}');
-                        } catch (_) {
-                            await cdp.clickElementReal('#_patent_dl_btn');
-                            await sleep(1500);
-                            await cdp.evaluateJS('if(typeof refresh==="function"){refresh();}');
-                        }
-                        for (var rr = 0; rr < 25; rr++) {
+                        await cdp.clickElementReal('#_patent_dl_btn');
+                        await sleep(1500);
+                        await cdp.evaluateJS('if(typeof refresh==="function"){refresh();}');
+                        // 强制显示验证码浮层（openTips 被拦截后页面不会自动显示）
+                        await cdp.evaluateJS(
+                            '(function(){["tipsDiv","vcodePanel","codePanel","captchaPanel","capPanel"].forEach(function(id){var e=document.getElementById(id);if(e){e.style.display="block";e.style.visibility="visible";e.style.opacity="1";e.style.zIndex="9999";}});return true;})()',
+                        );
+                        for (var rr = 0; rr < 10; rr++) {
                             await sleep(1000);
                             var capValue = await cdp.evaluateJS(
-                                '(function(){var v=document.getElementById("vcodeStr")?document.getElementById("vcodeStr").value:"";if(v)return v;if(window.__capCaptchaJson)return window.__capCaptchaJson.captchaStr||window.__capCaptchaJson.captchaImgStr||window.__capCaptchaJson.captcha||"";return "";})()',
+                                '(function(){var v=document.getElementById("vcodeStr")?document.getElementById("vcodeStr").value:"";if(v)return v;if(window.__capCaptchaJson)return window.__capCaptchaJson.captchaStr||window.__capCaptchaJson.captchaImgStr||window.__capCaptchaJson.captcha||"";var y=document.getElementById("yzm");if(y&&y.src&&y.src.indexOf("base64,")>=0)return y.src;return "";})()',
                             );
                             if (capValue) break;
                             if (rr === 4) {
@@ -959,200 +965,62 @@ export async function openCnipaBrowser(searchTitle) {
                             }
                         }
                     }
-                    await sleep(2000);
+                    await sleep(500);
                     try {
                         var diag2 = await cdp.evaluateJS(
                             'JSON.stringify({url:location.href,vcodeStrExists:!!document.getElementById("vcodeStr"),vcodeStrVal:(function(){try{return (document.getElementById("vcodeStr")||{}).value.substring(0,200);}catch(e){return "";}})(),cacheId:(function(){try{return (document.getElementById("cacheId")||{}).value||"";}catch(e){return "";}})(),yzmSrc:(function(){try{return (document.getElementById("yzm")||{}).src||"";}catch(e){return "";}})(),capDiagText:(function(){try{return (window.__capDiag&&window.__capDiag.text)?window.__capDiag.text.substring(0,500):"";}catch(e){return "";}})(),capCaptchaJson:(function(){try{return window.__capCaptchaJson?{captchaStr:window.__capCaptchaJson.captchaStr||"",cacheId:window.__capCaptchaJson.cacheId||""}:null;}catch(e){return null;}})(),tipsDivExists:!!document.getElementById("tipsDiv"),dlPath:(function(){try{return window.__capDlPath||"";}catch(e){return "";}})(),capLogger:(function(){try{return {reqs:window.__capLogger&&window.__capLogger.requests?window.__capLogger.requests.slice(-3):[],fetch:window.__capLogger&&window.__capLogger.fetch?window.__capLogger.fetch.slice(-3):[],errs:window.__capLogger&&window.__capLogger.errors?window.__capLogger.errors.slice(-3):[],xhrErr:window.__capLogger&&window.__capLogger.xhrError?window.__capLogger.xhrError.slice(-3):[]};}catch(e){return {};} })(),title:document.title,bodyLen:(document.body?document.body.innerHTML.length:0)})',
                         );
                         Zotero.debug('[Patent] 点击下载后诊断: ' + diag2);
                     } catch (_) {}
-                    Zotero.debug('[Patent] 尝试自动输入验证码并提交');
-                    // 通过 Node.js 辅助进程 OCR 验证码（使用本地安装的 tesseract.js@7）
-                    var ocrAnswer = '';
+                    Zotero.debug('[Patent] 检测到验证码，显示手动输入对话框');
                     try {
-                        var vcodeVal = await cdp.evaluateJS(
-                            'document.getElementById("vcodeStr")?document.getElementById("vcodeStr").value:""',
-                        );
-                        var yzmSrc = await cdp.evaluateJS(
+                        var yzmSrc2 = await cdp.evaluateJS(
                             '(function(){var y=document.getElementById("yzm");return y?y.src:"";})()',
                         );
-                        if (!vcodeVal && yzmSrc && yzmSrc.indexOf('base64,') >= 0) {
-                            Zotero.debug('[Patent] 验证码为图片格式，启动 Node.js OCR');
-                            var nodePath = cdp.findNodePath();
-                            var nmPath = getNodeModulesPath();
-                            if (!nodePath) {
-                                Zotero.debug('[Patent] 未找到 Node.js，跳过 OCR');
-                            } else if (!nmPath) {
-                                Zotero.debug('[Patent] 未找到 node_modules，跳过 OCR');
-                            } else {
-                                var tmpDir = Cc['@mozilla.org/file/directory_service;1']
-                                    .getService(Ci.nsIProperties)
-                                    .get('TmpD', Ci.nsIFile);
-                                var ts = String(Date.now());
-                                var imageFile = tmpDir.path + '\\cap_' + ts + '.jpg';
-                                var readyFile = tmpDir.path + '\\ready_' + ts + '.json';
-                                var helperFile = tmpDir.path + '\\ocr_' + ts + '.cjs';
-                                var yzmB64 = yzmSrc.split(',')[1] || yzmSrc;
-                                if (yzmB64) {
-                                    decodeBase64ToFile(imageFile, yzmB64);
-                                    cdp.writeTextFile(helperFile, OCR_HELPER_TEMPLATE);
-                                    var nodeFile = Cc['@mozilla.org/file/local;1'].createInstance(Ci.nsIFile);
-                                    nodeFile.initWithPath(nodePath);
-                                    var proc = Cc['@mozilla.org/process/util;1'].createInstance(Ci.nsIProcess);
-                                    proc.init(nodeFile);
-                                    proc.runwAsync([helperFile, imageFile, readyFile, nmPath], 4);
-                                    Zotero.debug('[Patent] OCR 辅助进程已启动，等待结果...');
-                                    for (var pw = 0; pw < 30; pw++) {
-                                        await sleep(1000);
-                                        var raw = cdp.readTextFile(readyFile);
-                                        if (raw) {
-                                            try {
-                                                var parsed = JSON.parse(raw);
-                                                if (parsed.error) {
-                                                    Zotero.debug('[Patent] OCR 辅助进程错误: ' + parsed.error);
-                                                    ocrAnswer = 'OCR_ERR:' + parsed.error;
-                                                } else {
-                                                    ocrAnswer = parsed.text || '';
-                                                }
-                                            } catch (_) {
-                                                ocrAnswer = raw;
-                                            }
-                                            break;
-                                        }
-                                        if (pw % 10 === 9) {
-                                            Zotero.debug('[Patent] 等待 OCR 结果... (' + (pw + 1) + 's)');
-                                        }
-                                    }
-                                    Zotero.debug('[Patent] OCR 结果: ' + (ocrAnswer || '(空)'));
-                                }
-                            }
-                        }
-                    } catch (_) {}
-                    if (ocrAnswer && !ocrAnswer.startsWith('OCR_ERR:')) {
-                        var cleanText = ocrAnswer.replace(/\s+/g, ' ').trim();
-                        var answer = null;
-                        // 先尝试匹配算式: 数字+/-数字
-                        var eqMatch = cleanText.match(/(\d+)\s*([+\-])\s*(\d+)/);
-                        if (eqMatch) {
-                            var a = parseInt(eqMatch[1], 10);
-                            var b = parseInt(eqMatch[3], 10);
-                            answer = eqMatch[2] === '+' ? a + b : a - b;
-                            Zotero.debug(
-                                '[Patent] OCR 识别算式: ' +
-                                    eqMatch[1] +
-                                    ' ' +
-                                    eqMatch[2] +
-                                    ' ' +
-                                    eqMatch[3] +
-                                    ' = ' +
-                                    answer,
-                            );
-                        } else {
-                            // 尝试匹配纯数字验证码
-                            var numMatch = cleanText.match(/(\d+)/);
-                            if (numMatch) {
-                                answer = parseInt(numMatch[1], 10);
-                                Zotero.debug('[Patent] OCR 识别纯数字: ' + answer);
-                            }
-                        }
-                        if (answer !== null) {
-                            var filled = await cdp.evaluateJS(
-                                '(function(){var inp=document.getElementById("vcode");if(!inp)return false;inp.value=' +
-                                    JSON.stringify(String(answer)) +
-                                    ';' +
-                                    'var oks=document.querySelectorAll("button,a,input[type=button]");for(var i=0;i<oks.length;i++){var t=(oks[i].textContent||oks[i].value||"").toLowerCase();if(t.indexOf("确定")>=0){oks[i].click();return true;}}return false;})()',
-                            );
-                            Zotero.debug('[Patent] OCR 答案提交结果: ' + filled);
-                        } else {
-                            Zotero.debug('[Patent] OCR 未能识别出算式: ' + ocrAnswer);
-                        }
-                    } else if (ocrAnswer) {
-                        Zotero.debug('[Patent] OCR 失败: ' + ocrAnswer);
-                    }
-                    // 如果 OCR 也没能获取到算式，提示手动输入
-                    try {
-                        var stillEmpty = await cdp.evaluateJS(
-                            'document.getElementById("vcodeStr")?document.getElementById("vcodeStr").value:""',
-                        );
-                        var vcodeInput = await cdp.evaluateJS(
-                            'document.getElementById("vcode")?document.getElementById("vcode").value:""',
-                        );
-                        if (!stillEmpty && !vcodeInput) {
-                            showNotification('OCR 未识别出算式，请在浏览器中手动输入验证码');
-                        }
-                    } catch (_) {}
-                    // 等待最多 180 秒：验证码解决后系统自动下载 PDF
-                    for (var dw2 = 0; dw2 < 180; dw2++) {
-                        if (!cdp.isConnected()) {
-                            Zotero.debug('[Patent] 浏览器已关闭');
-                            throw new Error('BROWSER_CLOSED');
-                        }
-                        await sleep(1000);
-                        try {
-                            // 1. AJAX hook 捕获到 CheckVcode/CheckCaptcha 返回的 filedl URL
-                            var filedlFromAjax = await cdp.evaluateJS('window.__filedlUrl||""');
-                            if (filedlFromAjax) {
-                                Zotero.debug('[Patent] 通过 AJAX 捕获到 filedl URL: ' + filedlFromAjax);
-                                pdfUrl = filedlFromAjax;
-                                if (pdfUrl.indexOf('http') < 0) {
-                                    if (pdfUrl.startsWith('/')) pdfUrl = 'http://egaz.cnipa.gov.cn' + pdfUrl;
-                                    else pdfUrl = 'http://egaz.cnipa.gov.cn/' + pdfUrl;
-                                }
-                                break;
-                            }
-                            // 1b. 尝试 CheckCaptcha 直调回退
-                            try {
-                                var checkRaw = await cdp.evaluateJS(
-                                    '(function(){if(typeof window.__capSubmitCaptcha==="function"){return window.__capSubmitCaptcha();}return "noop";})()',
+                        if (yzmSrc2 && yzmSrc2.indexOf('base64,') >= 0) {
+                            var userAnswer = await showCaptchaDialog(yzmSrc2);
+                            if (userAnswer) {
+                                Zotero.debug('[Patent] 用户已输入验证码: ' + userAnswer);
+                                Zotero.debug('[Patent] 通过 CheckCaptcha API 直调提交验证码...');
+                                var capResult = await cdp.evaluateJS(
+                                    '(function(){try{' +
+                                        'var v=' + JSON.stringify(userAnswer) + ';' +
+                                        'var dlPath=window.__capDlPath||"";' +
+                                        'var cacheId=(document.getElementById("cacheId")||{}).value||"";' +
+                                        'if(!v||!dlPath||!cacheId)return JSON.stringify({ok:false,reason:"missing",v:!!v,dlPath:!!dlPath,cacheId:!!cacheId});' +
+                                        'var xhr=new XMLHttpRequest();' +
+                                        'var url="http://egaz.cnipa.gov.cn/CheckCaptcha?vcodeInput="+encodeURIComponent(v)+"&dlpath="+encodeURIComponent(dlPath)+"&id="+encodeURIComponent(cacheId);' +
+                                        'xhr.open("GET",url,false);xhr.withCredentials=true;xhr.send(null);' +
+                                        'var txt=(xhr.responseText||"").trim();' +
+                                        'if(txt&&txt!=="fail"){return JSON.stringify({ok:true,path:txt});}' +
+                                        'return JSON.stringify({ok:false,reason:"fail",txt:txt,status:xhr.status});' +
+                                        '}catch(e){return JSON.stringify({ok:false,reason:"error",msg:e.message});}})()',
                                     true,
                                 );
-                                if (checkRaw && typeof checkRaw === 'string') {
-                                    var checkData = JSON.parse(checkRaw);
-                                    if (checkData && checkData.ok) {
-                                        var filedlFromCheck = await cdp.evaluateJS('window.__filedlUrl||""');
-                                        if (filedlFromCheck) {
-                                            Zotero.debug('[Patent] CheckCaptcha 直调成功: ' + filedlFromCheck);
-                                            pdfUrl = filedlFromCheck;
-                                            break;
+                                if (capResult) {
+                                    var capData = JSON.parse(capResult);
+                                    Zotero.debug('[Patent] CheckCaptcha 结果: ' + JSON.stringify(capData));
+                                    if (capData.ok && capData.path) {
+                                        pdfUrl = 'http://egaz.cnipa.gov.cn/filedl?path=' + capData.path;
+                                        Zotero.debug('[Patent] 获取到 PDF URL: ' + pdfUrl);
+                                        dw = 15;
+                                        break;
+                                    } else {
+                                        Zotero.debug('[Patent] CheckCaptcha 失败: ' + (capData.reason || '未知') + (capData.txt ? ', txt=' + capData.txt : ''));
+                                        var origDlPath = await cdp.evaluateJS('window.__capDlPath||""');
+                                        if (origDlPath) {
+                                            pdfUrl = 'http://egaz.cnipa.gov.cn/filedl?path=' + encodeURIComponent(origDlPath);
+                                            Zotero.debug('[Patent] 使用原始 dlPath 尝试: ' + pdfUrl);
                                         }
                                     }
+                                } else {
+                                    Zotero.debug('[Patent] CheckCaptcha 调用无返回');
                                 }
-                            } catch (_) {}
-                            // 2. 检查 filedl 新标签页
-                            var dlSw = await cdp.findShowpdfTabAndAttach();
-                            if (dlSw) {
-                                var dlNu = await cdp.evaluateJS('window.location.href');
-                                if (dlNu && dlNu.indexOf('filedl') >= 0) {
-                                    pdfUrl = dlNu;
-                                    Zotero.debug('[Patent] 新标签页 filedl URL: ' + pdfUrl);
-                                    break;
-                                }
+                            } else {
+                                Zotero.debug('[Patent] 用户取消了验证码输入');
                             }
-                            // 3. 检查当前页面是否有 filedl URL
-                            var hHtml = await cdp.evaluateJS('(document.documentElement.outerHTML||"")');
-                            if (hHtml && hHtml.indexOf('filedl') >= 0) {
-                                var egazFm = hHtml.match(/filedl\?path=[^'"\s]+/);
-                                if (egazFm) {
-                                    pdfUrl = 'http://egaz.cnipa.gov.cn/' + egazFm[0];
-                                    Zotero.debug('[Patent] 当前页面发现 filedl URL: ' + pdfUrl);
-                                    break;
-                                }
-                            }
-                            // 4. 检查当前 URL 跳转到了 filedl
-                            var curUrl2 = await cdp.evaluateJS('window.location.href');
-                            if (curUrl2 && curUrl2.indexOf('filedl') >= 0) {
-                                pdfUrl = curUrl2;
-                                Zotero.debug('[Patent] 页面跳转到 filedl: ' + pdfUrl);
-                                break;
-                            }
-                        } catch (_) {}
-                    }
-                    if (pdfUrl) {
-                        Zotero.debug('[Patent] 获取到 filedl URL: ' + pdfUrl);
-                        break;
-                    } else {
-                        Zotero.debug('[Patent] 等待验证码超时，未捕获到 filedl URL');
-                    }
+                        }
+                    } catch (_) {}
                 }
             }
         }
@@ -1171,7 +1039,9 @@ export async function openCnipaBrowser(searchTitle) {
     } finally {
         _running = false;
         if (!_keepBrowser) {
-            try { await cdp.quitBrowser(); } catch (_) {}
+            try {
+                await cdp.quitBrowser();
+            } catch (_) {}
         }
     }
 }

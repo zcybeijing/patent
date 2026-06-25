@@ -88,3 +88,95 @@ export async function askUserToPick<T extends { title?: string }>(
     // 3) 最后回退：返回第一项以便不中断流程（可根据需要改为返回 undefined）
     return items[0];
 }
+
+export async function showInputDialog(prompt: string, defaultVal?: string): Promise<string | null> {
+    var mainWin = Zotero.getMainWindow();
+    if (!mainWin) return null;
+    return new Promise(function (resolve) {
+        Services.tm.mainThread.dispatch(async function () {
+            try {
+                var result = mainWin.prompt(prompt, defaultVal || '');
+                resolve(result || null);
+            } catch (e) {
+                resolve(null);
+            }
+        }, Ci.nsIThread.DISPATCH_NORMAL);
+    });
+}
+
+export async function showCaptchaDialog(base64Image: string): Promise<string | null> {
+    Zotero.debug('[Patent] showCaptchaDialog: 创建验证码输入浮层');
+    var mainWin = Zotero.getMainWindow();
+    if (!mainWin) return null;
+    var doc = mainWin.document;
+    if (!doc) return null;
+    var overlay = doc.createElementNS('http://www.w3.org/1999/xhtml', 'div');
+    overlay.setAttribute(
+        'style',
+        'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:99999;display:flex;align-items:center;justify-content:center;',
+    );
+    var box = doc.createElementNS('http://www.w3.org/1999/xhtml', 'div');
+    box.setAttribute(
+        'style',
+        'background:#fff;border-radius:8px;padding:20px;min-width:320px;text-align:center;font-family:sans-serif;',
+    );
+    var heading = doc.createElementNS('http://www.w3.org/1999/xhtml', 'h3');
+    heading.textContent = '请输入验证码';
+    box.appendChild(heading);
+    var img = doc.createElementNS('http://www.w3.org/1999/xhtml', 'img');
+    img.setAttribute('src', base64Image);
+    img.setAttribute('style', 'max-width:280px;margin:10px 0;border:1px solid #ccc;');
+    box.appendChild(img);
+    var input = doc.createElementNS('http://www.w3.org/1999/xhtml', 'input');
+    input.setAttribute('type', 'text');
+    input.setAttribute(
+        'style',
+        'width:200px;padding:8px;font-size:16px;margin:10px 0;display:block;margin-left:auto;margin-right:auto;',
+    );
+    box.appendChild(input);
+    var btnBox = doc.createElementNS('http://www.w3.org/1999/xhtml', 'div');
+    btnBox.setAttribute('style', 'display:flex;gap:10px;justify-content:center;');
+    var okBtn = doc.createElementNS('http://www.w3.org/1999/xhtml', 'button');
+    okBtn.textContent = '确定';
+    okBtn.setAttribute('style', 'padding:8px 24px;font-size:14px;cursor:pointer;');
+    btnBox.appendChild(okBtn);
+    var cancelBtn = doc.createElementNS('http://www.w3.org/1999/xhtml', 'button');
+    cancelBtn.textContent = '取消';
+    cancelBtn.setAttribute('style', 'padding:8px 24px;font-size:14px;cursor:pointer;');
+    btnBox.appendChild(cancelBtn);
+    box.appendChild(btnBox);
+    overlay.appendChild(box);
+    doc.documentElement.appendChild(overlay);
+    input.focus();
+    return new Promise(function (resolve) {
+        function cleanup() {
+            try {
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            } catch (_) {}
+        }
+        okBtn.addEventListener('click', function () {
+            var val = input.value.trim();
+            if (!val) {
+                input.focus();
+                return;
+            }
+            cleanup();
+            resolve(val);
+        });
+        cancelBtn.addEventListener('click', function () {
+            cleanup();
+            resolve(null);
+        });
+        input.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') {
+                okBtn.click();
+            }
+            if (e.key === 'Escape') {
+                cancelBtn.click();
+            }
+        });
+        setTimeout(function () {
+            input.focus();
+        }, 100);
+    });
+}

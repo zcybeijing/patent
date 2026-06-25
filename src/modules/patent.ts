@@ -1,5 +1,5 @@
 import { config } from '../../package.json';
-import { showNotification, askUserToPick } from '../utils/uiHelpers';
+import { showNotification, showInputDialog, showCaptchaDialog, askUserToPick } from '../utils/uiHelpers';
 import {
     searchCnipaByTitle,
     fetchPatentDetailPdfUrl,
@@ -9,6 +9,7 @@ import {
     PatentSearchResult,
 } from '../utils/cnipaClient';
 import { getAttachments, extractPatentInfoFromPdf, PatentMetadata } from '../utils/pdfHelpers';
+import * as cdp from '../utils/cdpClient';
 
 let menuElements: Element[] = [];
 
@@ -69,9 +70,15 @@ export function registerMenu() {
             showNotification('条目没有标题');
             return;
         }
+        // Show input dialog for patent name before CDP
+        var searchTitle = await showInputDialog('请输入专利申请号或名称', title);
+        if (!searchTitle) {
+            showNotification('已取消');
+            return;
+        }
         showNotification('正在查询并下载专利 PDF……');
         try {
-            const pdfUrl = await cnipaGetPdfUrlViaCdp(title);
+            const pdfUrl = await cnipaGetPdfUrlViaCdp(searchTitle);
             if (pdfUrl) {
                 // 用 CDP 浏览器下载（有 CNIPA 会话，避免 502）
                 const safeTitle = (title || 'patent')
@@ -114,6 +121,11 @@ export function registerMenu() {
         } catch (e) {
             Zotero.debug('[Patent] get-file error: ' + e);
             showNotification('查询失败：' + e);
+        } finally {
+            try {
+                await cdp.quitBrowser();
+                Zotero.debug('[Patent] CDP 浏览器已关闭');
+            } catch (_) {}
         }
     });
     popup.appendChild(fileItem);

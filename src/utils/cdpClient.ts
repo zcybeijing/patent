@@ -561,7 +561,9 @@ export async function quitBrowser(): Promise<void> {
         }
     }
     if (ws) {
-        try { ws.close(); } catch (_) {}
+        try {
+            ws.close();
+        } catch (_) {}
         ws = null;
     }
     targetId = '';
