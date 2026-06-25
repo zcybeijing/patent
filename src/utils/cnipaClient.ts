@@ -693,62 +693,10 @@ export async function openCnipaBrowser(searchTitle) {
         }
         Zotero.debug('[Patent] 匹配结果: an=' + match.an + ', idx=' + matchIdx);
 
-        // ---- 步骤4: 在页面内通过 fetch POST 获取 SwDetail HTML，提取 PDF URL ----
-        // 不打开新标签页（避免弹窗拦截），不消耗 zl_xm 一次性状态
+        // ---- 步骤4: 等待搜索结果页面稳定后，鼠标点击导航到 SwDetail ----
         var pdfUrl = null;
-        Zotero.debug('[Patent] 通过同步 XHR 获取 SwDetail 内容...');
-        var spExpr =
-            'var sp=new URLSearchParams();' +
-            'sp.set("an",' +
-            JSON.stringify(match.an) +
-            ');' +
-            'sp.set("pubType",' +
-            JSON.stringify(match.pt) +
-            ');' +
-            'sp.set("ggr",' +
-            JSON.stringify(match.ggr) +
-            ');' +
-            'sp.set("trsSql","");' +
-            'sp.set("__RequestVerificationToken",(document.querySelector("input[name=\\"__RequestVerificationToken\\"]")||{}).value||"");';
-        var swRaw = await Promise.race([
-            cdp.evaluateJS(
-                '(function(){' +
-                    'return new Promise(function(r){' +
-                    spExpr +
-                    'var url="/Sw/SwDetail";' +
-                    'var body=sp.toString();' +
-                    'var timer=setTimeout(function(){try{r(JSON.stringify({error:"timeout"}));}catch(e){}},20000);' +
-                    'fetch(url,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded","Referer":location.href},body:body,credentials:"include"})' +
-                    '.then(function(fr){clearTimeout(timer);return fr.text();})' +
-                    '.then(function(h){clearTimeout(timer);' +
-                    'var fm=h.match(/https?:\\/\\/egaz\\.cnipa\\.gov\\.cn\\/(showpdf|filedl)[^"\'\\s]*/);' +
-                    'if(fm)r(JSON.stringify({pdfUrl:fm[0],htmlLen:h.length}));' +
-                    'else r(JSON.stringify({pdfUrl:"",htmlLen:h.length,sample:h.substring(0,2000)}));' +
-                    '})' +
-                    '.catch(function(e){clearTimeout(timer);r(JSON.stringify({error:e.message}));});' +
-                    '});' +
-                    '})()',
-                true,
-            ),
-            sleep(25000).then(function () {
-                return JSON.stringify({ error: 'cdp_eval_timeout' });
-            }),
-        ]);
-        if (swRaw) {
-            var swData = JSON.parse(swRaw);
-            Zotero.debug(
-                '[Patent] SwDetail: htmlLen=' +
-                    swData.htmlLen +
-                    ', pdfUrl=' +
-                    (swData.pdfUrl || '无') +
-                    (swData.error ? ', error=' + swData.error : '') +
-                    (swData.sample ? ', sample=' + swData.sample : ''),
-            );
-            if (swData.pdfUrl) pdfUrl = swData.pdfUrl;
-        }
-
-        // 步骤4a: 如果 XHR 没拿到 PDF URL（可能页面有验证码或下载按钮），用鼠标点击导航降级
-        if (!pdfUrl) {
+        Zotero.debug('[Patent] 等待后直接鼠标点击打开 SwDetail...');
+        await sleep(1500);
             Zotero.debug('[Patent] XHR 未获取到 PDF URL，尝试鼠标点击打开 SwDetail...');
             try {
                 await cdp.evaluateJS(
@@ -1023,7 +971,6 @@ export async function openCnipaBrowser(searchTitle) {
                     } catch (_) {}
                 }
             }
-        }
         if (pdfUrl) {
             Zotero.debug('[Patent] 获取到 PDF URL: ' + pdfUrl);
         } else {
