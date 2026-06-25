@@ -111,7 +111,22 @@ export function registerMenu() {
                         }
                     }
                     await Zotero.Attachments.importFromFile({ file: savePath, parentItemID: item.id });
-                    showNotification('PDF 已下载并附加到条目');
+                    try {
+                        // @ts-expect-error
+                        if (typeof ztoolkit !== 'undefined' && ztoolkit.ProgressWindow) {
+                            // @ts-expect-error
+                            new ztoolkit.ProgressWindow(config.addonName)
+                                .createLine({
+                                    type: 'success',
+                                    text: 'PDF 下载完成并已放入条目',
+                                })
+                                .show();
+                        } else {
+                            showNotification('PDF 已下载并附加到条目');
+                        }
+                    } catch (_) {
+                        showNotification('PDF 已下载并附加到条目');
+                    }
                 } else {
                     showNotification('CDP 下载未能完成，请手动处理');
                 }
