@@ -1,6 +1,6 @@
 {
   "name": "zotero-patent",
-  "version": "2.2",
+  "version": "2.3",
   "description": "Zotero 插件：从中国专利网抓取专利元数据并下载 PDF，更新条目",
   "type": "module",
   "config": {
